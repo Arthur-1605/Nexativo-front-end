@@ -1,0 +1,402 @@
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+:root {
+  font-family: 'Inter', sans-serif;
+  color: #202b3c;
+  background: #f4f7fc;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {    
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.pagina {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 24px;
+  gap: 24px;
+}
+
+.painel-info {
+  position: relative;
+  overflow: hidden;
+  min-height: 700px;
+  padding: 42px;
+  border-radius: 24px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  color: white;
+  background:
+    radial-gradient(circle at 85% 15%, #4385e8 0, transparent 35%),
+    linear-gradient(145deg, #102a56, #174a94 60%, #2468c8);
+}
+
+.painel-info::before,
+.painel-info::after {
+  content: "";
+  position: absolute;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.painel-info::before {
+  width: 380px;
+  height: 380px;
+  right: -120px;
+  bottom: 60px;
+}
+
+.painel-info::after {
+  width: 260px;
+  height: 260px;
+  right: -60px;
+  bottom: 120px;
+}
+
+.marca {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 23px;
+  font-weight: 800;
+  position: relative;
+  z-index: 1;
+}
+
+.marca-icone {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+}
+
+.info-conteudo {
+  max-width: 510px;
+  position: relative;
+  z-index: 1;
+  margin: 50px 0;
+}
+
+.etiqueta {
+  font-size: 11px;
+  letter-spacing: 2px;
+  font-weight: 700;
+  color: #bcd7ff;
+}
+
+.info-conteudo h1 {
+  font-size: clamp(32px, 3.5vw, 48px);
+  line-height: 1.15;
+  margin: 22px 0;
+  letter-spacing: -1.5px;
+}
+
+.info-conteudo > p {
+  color: #d6e4fa;
+  line-height: 1.8;
+  max-width: 390px;
+  font-size: 14px;
+}
+
+.destaque {
+  margin-top: 38px;
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.avatares {
+  display: flex;
+  padding-left: 4px;
+}
+
+.avatares span {
+  width: 35px;
+  height: 35px;
+  margin-left: -4px;
+  display: grid;
+  place-items: center;
+  border: 2px solid #2457a2;
+  border-radius: 50%;
+  background: #dceaff;
+  color: #16458b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.destaque p,
+.rodape-info {
+  font-size: 12px;
+  color: #d6e4fa;
+}
+
+.rodape-info {
+  position: relative;
+  z-index: 1;
+}
+
+.painel-formulario {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 35px;
+}
+
+.formulario-container {
+  width: 100%;
+  max-width: 430px;
+}
+
+.boas-vindas {
+  margin-bottom: 30px;
+}
+
+.mini-icone {
+  color: #2563eb;
+  font-size: 25px;
+}
+
+.boas-vindas h2 {
+  font-size: 29px;
+  margin: 12px 0 10px;
+  letter-spacing: -0.8px;
+}
+
+.boas-vindas p {
+  color: #7a8495;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.abas {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 5px;
+  gap: 5px;
+  background: #e9eef7;
+  border-radius: 12px;
+  margin-bottom: 27px;
+}
+
+.aba {
+  border: none;
+  background: transparent;
+  border-radius: 9px;
+  padding: 12px;
+  color: #7a8495;
+  font-size: 13px;
+  font-weight: 600;
+  transition: 0.2s;
+}
+
+.aba.ativa {
+  background: white;
+  color: #245fc5;
+  box-shadow: 0 2px 8px #1a315510;
+}
+
+.campo {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin-bottom: 19px;
+}
+
+.campo label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.campo input {
+  width: 100%;
+  height: 49px;
+  border: 1px solid #dce2ec;
+  border-radius: 10px;
+  background: white;
+  padding: 0 14px;
+  color: #202b3c;
+  outline: none;
+  transition: border 0.2s, box-shadow 0.2s;
+}
+
+.campo input::placeholder {
+  color: #a3abba;
+  font-size: 13px;
+}
+
+.campo input:focus {
+  border-color: #3478e5;
+  box-shadow: 0 0 0 3px #3478e51a;
+}
+
+.senha-container {
+  position: relative;
+}
+
+.senha-container input {
+  padding-right: 85px;
+}
+
+.mostrar-senha {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  color: #2866ca;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.opcoes {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 2px 0 24px;
+  font-size: 11px;
+}
+
+.lembrar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #6e788a;
+  cursor: pointer;
+}
+
+.lembrar input {
+  accent-color: #2866ca;
+}
+
+.esqueci {
+  color: #2866ca;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.botao-principal {
+  width: 100%;
+  height: 51px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  border: none;
+  border-radius: 10px;
+  background: #2866ca;
+  color: white;
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: 0 6px 15px #2866ca25;
+  transition: background 0.2s, transform 0.2s;
+}
+
+.botao-principal:hover {
+  background: #194fa8;
+  transform: translateY(-2px);
+}
+
+.botao-principal span {
+  font-size: 19px;
+}
+
+.trocar-modo {
+  margin-top: 26px;
+  text-align: center;
+  font-size: 12px;
+  color: #7a8495;
+}
+
+.trocar-modo button {
+  border: none;
+  background: transparent;
+  color: #2866ca;
+  font-weight: 700;
+}
+
+.termos {
+  margin-top: 45px;
+  text-align: center;
+  font-size: 10px;
+  line-height: 1.6;
+  color: #9aa2b0;
+}
+
+@media (max-width: 900px) {
+  .pagina {
+    grid-template-columns: 1fr;
+    padding: 14px;
+  }
+
+  .painel-info {
+    min-height: 330px;
+    padding: 28px;
+  }
+
+  .info-conteudo {
+    margin: 40px 0 20px;
+  }
+
+  .info-conteudo h1 {
+    font-size: 34px;
+  }
+
+  .rodape-info {
+    display: none;
+  }
+
+  .painel-formulario {
+    padding: 35px 15px;
+  }
+}
+
+@media (max-width: 480px) {
+  .pagina {
+    padding: 8px;
+    gap: 8px;
+  }
+
+  .painel-info {
+    min-height: 300px;
+    padding: 23px;
+    border-radius: 17px;
+  }
+
+  .info-conteudo h1 {
+    font-size: 29px;
+  }
+
+  .painel-formulario {
+    padding: 30px 12px;
+  }
+
+  .boas-vindas h2 {
+    font-size: 25px;
+  }
+}

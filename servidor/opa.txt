@@ -1,0 +1,3 @@
+nome = Gemini API Key
+nomedoprojeto = projects/512050665676   
+numerodoprojeto = 512050665676

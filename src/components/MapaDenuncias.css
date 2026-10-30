@@ -1,0 +1,348 @@
+
+/* ===== MAPA DE DENÚNCIAS ===== */
+
+.mapa-denuncias {
+  --mapa-texto: #e8eefb;
+  --mapa-secundario: #94a3b8;
+  --mapa-fundo: #111a2d;
+  --mapa-borda: rgba(148, 163, 184, 0.16);
+  --mapa-azul: #3b82f6;
+  --mapa-roxo: #6366f1;
+
+  width: 100%;
+  min-width: 0;
+  color: var(--mapa-texto);
+  box-sizing: border-box;
+}
+
+.mapa-denuncias *,
+.mapa-denuncias *::before,
+.mapa-denuncias *::after {
+  box-sizing: border-box;
+}
+
+/* ===== CABEÇALHO ===== */
+
+.mapa-topo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  width: 100%;
+  margin-bottom: 16px;
+}
+
+.mapa-topo h2 {
+  margin: 0;
+  color: var(--mapa-texto);
+  font-size: clamp(18px, 2vw, 22px);
+  font-weight: 650;
+  letter-spacing: -0.025em;
+}
+
+.mapa-topo p {
+  margin: 4px 0 0;
+  color: var(--mapa-secundario);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.6;
+}
+
+/* ===== ÁREA DO MAPA ===== */
+
+.mapa-area {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  height: 340px;
+  margin-top: 0;
+  overflow: hidden;
+  border: 1px solid var(--mapa-borda);
+  border-radius: 12px;
+  background: #111827;
+  isolation: isolate;
+}
+
+.mapa {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  z-index: 0;
+}
+
+/* Mapa escuro com tons azulados */
+.mapa .leaflet-tile {
+  filter: brightness(0.48) contrast(1.08) saturate(0.72);
+}
+
+.mapa .leaflet-container {
+  width: 100%;
+  height: 100%;
+  background: #111827;
+  font-family: inherit;
+}
+
+.mapa .leaflet-control-zoom a {
+  background: #111a2d;
+  color: #e8eefb;
+  border-color: var(--mapa-borda);
+}
+
+.mapa .leaflet-control-zoom a:hover {
+  background: #1c2940;
+  color: #ffffff;
+}
+
+.mapa .leaflet-control-attribution {
+  background: rgba(11, 17, 32, 0.82);
+  color: #cbd5e1;
+}
+
+.mapa .leaflet-control-attribution a {
+  color: #93c5fd;
+}
+
+/* ===== ÍCONE DA DENÚNCIA ===== */
+
+.icone-denuncia {
+  background: transparent !important;
+  border: none !important;
+}
+
+/* ===== RADAR ANIMADO ===== */
+
+.ponto-radar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 80px;
+  height: 80px;
+  pointer-events: none;
+}
+
+.ponto-central {
+  position: absolute;
+  z-index: 5;
+  width: 12px;
+  height: 12px;
+  background: #3b82f6;
+  border: 2px solid #dbeafe;
+  border-radius: 50%;
+  box-shadow:
+    0 0 8px rgba(59, 130, 246, 0.9),
+    0 0 18px rgba(59, 130, 246, 0.55);
+}
+
+.onda {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  background: rgba(59, 130, 246, 0.14);
+  border: 1.5px solid rgba(96, 165, 250, 0.75);
+  border-radius: 50%;
+  animation: expandirOnda 3s cubic-bezier(0.2, 0.6, 0.4, 1) infinite;
+}
+
+.onda-1 {
+  animation-delay: 0s;
+}
+
+.onda-2 {
+  animation-delay: 1s;
+}
+
+.onda-3 {
+  animation-delay: 2s;
+}
+
+@keyframes expandirOnda {
+  0% {
+    width: 12px;
+    height: 12px;
+    opacity: 0.9;
+    border-width: 2px;
+  }
+
+  70% {
+    opacity: 0.2;
+  }
+
+  100% {
+    width: 72px;
+    height: 72px;
+    opacity: 0;
+    border-width: 1px;
+  }
+}
+
+/* ===== CONTROLES DE ROTA ===== */
+
+.controles-rota {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  width: 100%;
+  padding: 14px;
+  color: var(--mapa-texto);
+  background: var(--mapa-fundo);
+  border: 1px solid var(--mapa-borda);
+  border-radius: 0 0 12px 12px;
+}
+
+.controles-rota button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 10px 14px;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 9px;
+  background: linear-gradient(135deg, #3478f6, #515fe0);
+  color: #ffffff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.2s ease,
+    transform 0.2s ease,
+    opacity 0.2s ease;
+}
+
+.controles-rota button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.08);
+}
+
+.controles-rota button:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 3px;
+}
+
+.controles-rota button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.controles-rota p {
+  flex: 1 1 100%;
+  margin: 0;
+  color: var(--mapa-secundario);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+/* ===== TEMA CLARO ===== */
+
+body.tema-claro .mapa-denuncias {
+  --mapa-texto: #24352b;
+  --mapa-secundario: #718174;
+  --mapa-fundo: #ffffff;
+  --mapa-borda: #d8e6db;
+}
+
+body.tema-claro .mapa-area {
+  border-color: var(--mapa-borda);
+  background: #eaf1ec;
+}
+
+body.tema-claro .mapa .leaflet-tile {
+  filter: brightness(0.92) saturate(0.8) contrast(0.98);
+}
+
+body.tema-claro .mapa .leaflet-container {
+  background: #eaf1ec;
+}
+
+body.tema-claro .mapa .leaflet-control-zoom a {
+  background: #ffffff;
+  color: #24352b;
+  border-color: #d8e6db;
+}
+
+body.tema-claro .mapa .leaflet-control-zoom a:hover {
+  background: #edf6ef;
+}
+
+body.tema-claro .mapa .leaflet-control-attribution {
+  background: rgba(255, 255, 255, 0.9);
+  color: #526656;
+}
+
+body.tema-claro .mapa .leaflet-control-attribution a {
+  color: #198754;
+}
+
+body.tema-claro .controles-rota {
+  background: #ffffff;
+  border-color: #d8e6db;
+}
+
+body.tema-claro .controles-rota button {
+  background: linear-gradient(135deg, #198754, #249b63);
+  border-color: rgba(25, 135, 84, 0.25);
+}
+
+/* ===== RESPONSIVIDADE ===== */
+
+@media (max-width: 760px) {
+  .mapa-topo {
+    align-items: flex-start;
+  }
+
+  .mapa-area {
+    height: 300px;
+  }
+
+  .controles-rota {
+    padding: 12px;
+  }
+
+  .controles-rota button {
+    flex: 1 1 auto;
+  }
+}
+
+@media (max-width: 420px) {
+  .mapa-area {
+    height: 260px;
+    border-radius: 9px;
+  }
+
+  .mapa-topo h2 {
+    font-size: 18px;
+  }
+
+  .controles-rota button {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .onda {
+    animation: none;
+    opacity: 0.25;
+  }
+
+  .controles-rota button {
+    transition: none;
+  }
+}
+.ponto-radar {
+  --cor-gravidade: #64748b;
+}
+
+.ponto-radar .ponto-central {
+  background: var(--cor-gravidade);
+  border-color: #ffffff;
+  box-shadow: 0 0 12px var(--cor-gravidade);
+}
+
+.ponto-radar .onda {
+  border-color: var(--cor-gravidade);
+}
