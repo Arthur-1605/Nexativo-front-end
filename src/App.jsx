@@ -28,8 +28,8 @@ function App() {
           <Route path="/denuncia" element={<Denuncia />} />
         </Route>
 
-        {/* Painel administrativo */}
-        <Route element={<RotaProtegida/>}>
+        {/* Painel administrativo (somente administradores) */}
+        <Route element={<RotaProtegida apenasAdmin />}>
           <Route path="/admin" element={<Admin />} />
           <Route path="/admin/denuncias" element={<DenunciasTs />} />
           <Route path="/admin/analise" element={<Analise />} />

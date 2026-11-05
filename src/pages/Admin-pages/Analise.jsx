@@ -3,7 +3,6 @@ import { useEffect, useState } from "react";
 import {
   buscarOcorrenciasCompletas,
   buscarHistorico,
-  buscarAtendimentos,
   formatarHistorico,
   atualizarStatus,
   registrarHistorico,
@@ -60,22 +59,15 @@ function Analise() {
 
       const detalhes = await Promise.all(
         base.map(async (o) => {
-          const [historico, atendimentos] = await Promise.all([
-            buscarHistorico(o.id),
-            buscarAtendimentos(o.id),
-          ]);
-
+          const historico = await buscarHistorico(o.id);
           return {
             ...o,
             etapa: statusParaEtapa[o.status] || null,
-            responsavel: atendimentos.length
-              ? atendimentos[atendimentos.length - 1].equipe_nome
-              : "Não atribuído",
+            responsavel: o.responsavel || "Não atribuído",
             historico: historico.slice().reverse().map(formatarHistorico),
           };
         })
       );
-
       setOcorrencias(detalhes);
       setErro("");
       return detalhes;

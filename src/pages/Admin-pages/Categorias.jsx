@@ -1,5 +1,11 @@
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import {
+  buscarCategorias,
+  criarCategoria,
+  atualizarCategoria,
+  excluirCategoria as excluirCategoriaBD
+} from "../../dados";
 import Header from "../../components/Header";
 import Sidebar from "../../components/Sidebar";
 import "./AdminPaginas.css";
@@ -7,39 +13,10 @@ import "./Categorias.css";
 
 const iconesDisponiveis = ["💧", "💡", "🕳️", "🚰", "🗑️", "🌳", "🚧", "📍"];
 
-const categoriasIniciais = [
-  {
-    id: 1,
-    nome: "Vazamento de água",
-    descricao: "Vazamentos em tubulações e redes de abastecimento.",
-    icone: "💧",
-    status: "Ativa",
-  },
-  {
-    id: 2,
-    nome: "Iluminação pública",
-    descricao: "Postes apagados e lâmpadas com defeito.",
-    icone: "💡",
-    status: "Ativa",
-  },
-  {
-    id: 3,
-    nome: "Buracos na via",
-    descricao: "Buracos, rachaduras e danos no asfalto.",
-    icone: "🕳️",
-    status: "Ativa",
-  },
-  {
-    id: 4,
-    nome: "Esgoto",
-    descricao: "Entupimentos e problemas na rede de esgoto.",
-    icone: "🚰",
-    status: "Inativa",
-  },
-];
-
 function Categorias() {
-  const [categorias, setCategorias] = useState(categoriasIniciais);
+  const [categorias, setCategorias] = useState([]);
+  const [carregando, setCarregando] = useState(true);
+  const [erroPagina, setErroPagina] = useState("");
   const [pesquisa, setPesquisa] = useState("");
   const [filtroStatus, setFiltroStatus] = useState("Todas");
   const [modalAberto, setModalAberto] = useState(false);
@@ -48,6 +25,30 @@ function Categorias() {
   const [descricao, setDescricao] = useState("");
   const [icone, setIcone] = useState("📍");
   const [status, setStatus] = useState("Ativa");
+
+  async function carregarCategorias() {
+    try {
+      setErroPagina("");
+      const lista = await buscarCategorias();
+      setCategorias(
+        lista.map((c) => ({
+          id: c.id_categoria,
+          nome: c.nome,
+          descricao: c.descricao || "",
+          icone: c.icone || "📍",
+          status: c.status || "Ativa",
+        }))
+      );
+    } catch (erro) {
+      setErroPagina(erro.message || "Não foi possível carregar as categorias.");
+    } finally {
+      setCarregando(false);
+    }
+  }
+
+  useEffect(() => {
+    carregarCategorias();
+  }, []);
 
   const totalAtivas = categorias.filter((c) => c.status === "Ativa").length;
   const totalInativas = categorias.filter((c) => c.status === "Inativa").length;
@@ -81,50 +82,42 @@ function Categorias() {
     setModalAberto(true);
   }
 
-  function salvarCategoria(e) {
+  async function salvarCategoria(e) {
     e.preventDefault();
-
     if (!nome.trim()) return;
 
-    if (categoriaEditando) {
-      setCategorias((atuais) =>
-        atuais.map((categoria) =>
-          categoria.id === categoriaEditando.id
-            ? {
-                ...categoria,
-                nome: nome.trim(),
-                descricao: descricao.trim() || "Sem descrição",
-                icone,
-                status,
-              }
-            : categoria
-        )
-      );
-    } else {
-      setCategorias((atuais) => [
-        ...atuais,
-        {
-          id: Date.now(),
-          nome: nome.trim(),
-          descricao: descricao.trim() || "Sem descrição",
-          icone,
-          status,
-        },
-      ]);
-    }
+    const dados = {
+      nome: nome.trim(),
+      descricao: descricao.trim(),
+      icone,
+      status,
+    };
 
-    setModalAberto(false);
+    try {
+      if (categoriaEditando) {
+        await atualizarCategoria(categoriaEditando.id, dados);
+      } else {
+        await criarCategoria(dados);
+      }
+      setModalAberto(false);
+      await carregarCategorias();
+    } catch (erro) {
+      window.alert(erro.message);
+    }
   }
 
-  function excluirCategoria(categoria) {
+  async function excluirCategoria(categoria) {
     const confirmou = window.confirm(
       `Deseja excluir a categoria "${categoria.nome}"?`
     );
 
-    if (confirmou) {
-      setCategorias((atuais) =>
-        atuais.filter((c) => c.id !== categoria.id)
-      );
+    if (!confirmou) return;
+
+    try {
+      await excluirCategoriaBD(categoria.id);
+      await carregarCategorias();
+    } catch (erro) {
+      window.alert(erro.message);
     }
   }
 
@@ -237,6 +230,12 @@ function Categorias() {
               </div>
             </div>
 
+            {erroPagina && (
+              <p className="categorias-vazio" role="alert">{erroPagina}</p>
+            )}
+            {carregando && !erroPagina && (
+              <p className="categorias-vazio" role="status">Carregando categorias...</p>
+            )}
             <div className="categorias-tabela-scroll">
               <table className="categorias-tabela">
                 <thead>

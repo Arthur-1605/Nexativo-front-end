@@ -326,3 +326,83 @@ export async function alterarStatusUsuario(id, status) {
 
     return buscarUsuarioPorId(idNormalizado);
 }
+
+
+// ======================================================
+// PERFIL DO PRÓPRIO USUÁRIO
+// ======================================================
+
+export async function atualizarPerfilProprio(id, { nome, email }) {
+    const idNormalizado = Number(id);
+    const emailNormalizado = String(email || "").trim().toLowerCase();
+
+    const [existentes] = await db.execute(
+        `SELECT id_usuario FROM usuarios
+         WHERE email = ? AND id_usuario <> ?
+         LIMIT 1`,
+        [emailNormalizado, idNormalizado]
+    );
+
+    if (existentes.length > 0) {
+        throw new Error("EMAIL_JA_CADASTRADO");
+    }
+
+    await db.execute(
+        `UPDATE usuarios SET nome = ?, email = ? WHERE id_usuario = ?`,
+        [String(nome).trim(), emailNormalizado, idNormalizado]
+    );
+
+    return buscarUsuarioPorId(idNormalizado);
+}
+
+export async function alterarSenhaProprio(id, senhaAtual, novaSenha) {
+    const [usuarios] = await db.execute(
+        `SELECT senha FROM usuarios WHERE id_usuario = ? LIMIT 1`,
+        [Number(id)]
+    );
+
+    if (!usuarios.length) {
+        throw new Error("USUARIO_INEXISTENTE");
+    }
+
+    const armazenada = usuarios[0].senha;
+    const confere = ehHashBcrypt(armazenada)
+        ? await bcrypt.compare(senhaAtual, armazenada)
+        : armazenada === senhaAtual;
+
+    if (!confere) {
+        throw new Error("SENHA_ATUAL_INCORRETA");
+    }
+
+    const novoHash = await bcrypt.hash(novaSenha, SALT_ROUNDS);
+
+    await db.execute(
+        `UPDATE usuarios SET senha = ? WHERE id_usuario = ?`,
+        [novoHash, Number(id)]
+    );
+
+    return true;
+}
+
+// ======================================================
+// PREFERÊNCIAS
+// ======================================================
+
+export async function obterPreferencias(id) {
+    await db.execute(
+        `INSERT IGNORE INTO preferencias_usuarios (id_usuario, notificacoes, alertas_urgentes)
+         VALUES (?, 1, 1)`,
+        [Number(id)]
+    );
+
+    const [linhas] = await db.execute(
+        `SELECT notificacoes, alertas_urgentes
+         FROM preferencias_usuarios WHERE id_usuario = ?`,
+        [Number(id)]
+    );
+
+    return {
+        notificacoes: Boolean(linhas[0].notificacoes),
+        alertasUrgentes: Boolean(linhas[0].alertas_urgentes)
+    };
+}

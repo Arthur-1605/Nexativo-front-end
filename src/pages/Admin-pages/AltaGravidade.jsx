@@ -3,7 +3,6 @@ import { useEffect, useState } from "react";
 import {
   buscarOcorrenciasCompletas,
   buscarHistorico,
-  buscarAtendimentos,
   formatarHistorico,
   atualizarStatus,
   registrarHistorico,
@@ -36,23 +35,15 @@ function AltaGravidade() {
 
       const detalhes = await Promise.all(
         altas.map(async (o) => {
-          const [historico, atendimentos] = await Promise.all([
-            buscarHistorico(o.id),
-            buscarAtendimentos(o.id),
-          ]);
-
+          const historico = await buscarHistorico(o.id);
           return {
             ...o,
             risco: "Alto",
-            responsavel: atendimentos.length
-              ? atendimentos[atendimentos.length - 1].equipe_nome
-              : "",
-            fatores: [],
+            responsavel: o.responsavel || "",
             historico: historico.slice().reverse().map(formatarHistorico),
           };
         })
       );
-
       setIncidentes(detalhes);
       setSelecionadoId((atual) => atual ?? detalhes[0]?.id ?? null);
       return detalhes;
@@ -174,19 +165,19 @@ function AltaGravidade() {
 
             <div className="ag-status-sistema">
               <span className="ag-status-ponto" />
-              Dados demonstrativos
+              Dados em tempo real
             </div>
           </div>
 
           <div className="ag-indicadores">
             <article className="ag-indicador">
-              <span>Risco muito alto</span>
+              <span>Em aberto</span>
               <strong className="ag-numero-critico">
                 {incidentes.filter(
-                  (item) => item.risco === "Muito alto"
+                  (item) => item.status !== "Resolvida"
                 ).length}
               </strong>
-              <small>Exigem avaliação prioritária</small>
+              <small>Prioridade alta ainda não resolvida</small>
             </article>
 
             <article className="ag-indicador">
@@ -394,15 +385,6 @@ function AltaGravidade() {
                         </p>
                       </div>
                     </div>
-
-                    <ul className="ag-fatores">
-                      {selecionado.fatores.map((fator) => (
-                        <li key={fator}>
-                          <span />
-                          {fator}
-                        </li>
-                      ))}
-                    </ul>
                   </div>
 
                   <div className="ag-bloco">

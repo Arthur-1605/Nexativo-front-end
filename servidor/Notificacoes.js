@@ -41,6 +41,17 @@ export async function criarNotificacao(dados) {
 
 
 
+export async function marcarTodasComoLidas(idUsuario) {
+
+    await db.execute(
+        `UPDATE notificacoes
+         SET lida = 1
+         WHERE id_usuario = ?`,
+        [idUsuario]
+    );
+
+}
+
 export async function marcarComoLida(id) {
 
     await db.execute(

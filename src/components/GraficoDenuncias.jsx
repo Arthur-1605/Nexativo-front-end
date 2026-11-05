@@ -11,6 +11,7 @@ import {
 } from "recharts";
 
 import { useEffect, useState } from "react";
+import { buscarEstatisticas } from "../dados";
 import "./GraficoDenuncias.css";
 
 function GraficoDenuncias() {
@@ -42,22 +43,24 @@ function GraficoDenuncias() {
   const corBordaTooltip = temaClaro ? "#cfe2d4" : "#293650";
   const corTextoTooltip = temaClaro ? "#24352b" : "#ffffff";
 
-  const categorias = [
-    { categoria: "Vazamento", quantidade: 35 },
-    { categoria: "Buraco na via", quantidade: 25 },
-    { categoria: "Iluminação", quantidade: 15 },
-    { categoria: "Lixo", quantidade: 15 },
-    { categoria: "Outros", quantidade: 10 }
-  ];
+  const [estatisticas, setEstatisticas] = useState(null);
 
-  const evolucao = [
-    { dia: "18/09", denuncias: 12 },
-    { dia: "19/09", denuncias: 18 },
-    { dia: "20/09", denuncias: 14 },
-    { dia: "21/09", denuncias: 22 },
-    { dia: "22/09", denuncias: 19 },
-    { dia: "23/09", denuncias: 25 }
-  ];
+  useEffect(() => {
+    buscarEstatisticas()
+      .then(setEstatisticas)
+      .catch(() => setEstatisticas(null));
+  }, []);
+
+  // Categorias reais do banco (só as que têm ocorrências, ordenadas por volume)
+  const categorias = (estatisticas?.porCategoria ?? []).filter(
+    (c) => c.quantidade > 0
+  );
+
+  // Últimos 7 dias, no formato dd/mm
+  const evolucao = (estatisticas?.porDia ?? []).slice(-7).map((d) => ({
+    dia: d.dia.slice(8, 10) + "/" + d.dia.slice(5, 7),
+    denuncias: d.quantidade
+  }));
 
   const estiloTooltip = {
     background: corTooltip,

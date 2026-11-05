@@ -16,11 +16,38 @@ import {
 } from "react-icons/fa";
 
 import { useTema } from "../context/TemaContext";
+import { lerUsuarioSalvo, ehAdministrador } from "../api";
+import {
+  buscarNotificacoes,
+  marcarNotificacaoLida,
+  marcarTodasNotificacoesLidas
+} from "../dados";
 import "./Header.css";
+
+function formatarHoraNotificacao(valor) {
+  const data = new Date(valor);
+  if (Number.isNaN(data.getTime())) return "";
+
+  const minutos = Math.round((Date.now() - data.getTime()) / 60000);
+  if (minutos < 1) return "Agora";
+  if (minutos < 60) return `Há ${minutos} min`;
+  if (minutos < 1440) return `Há ${Math.round(minutos / 60)} h`;
+  return data.toLocaleDateString("pt-BR");
+}
 
 function Header() {
   const navigate = useNavigate();
   const { temaClaro, alternarTema } = useTema();
+  const [usuario] = useState(lerUsuarioSalvo);
+  const nomeUsuario = usuario?.nome || usuario?.email || "Usuário";
+  const primeiroNome = nomeUsuario.split(" ")[0];
+  const iniciais = nomeUsuario
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((parte) => parte[0].toUpperCase())
+    .join("");
+  const rotuloPerfil = ehAdministrador(usuario) ? "Administrador" : "Usuário";
 
   const [mobile, setMobile] = useState(
     window.matchMedia("(max-width: 700px)").matches
@@ -31,29 +58,7 @@ function Header() {
   const [pesquisaAberta, setPesquisaAberta] = useState(false);
   const [termoPesquisa, setTermoPesquisa] = useState("");
 
-  const [notificacoes, setNotificacoes] = useState([
-    {
-      id: 1,
-      titulo: "Nova denúncia registrada",
-      mensagem: "Uma nova ocorrência foi enviada.",
-      hora: "Agora",
-      lida: false
-    },
-    {
-      id: 2,
-      titulo: "Denúncia de alta gravidade",
-      mensagem: "Existe uma ocorrência aguardando análise.",
-      hora: "Há 10 minutos",
-      lida: false
-    },
-    {
-      id: 3,
-      titulo: "Denúncia atualizada",
-      mensagem: "O status de uma ocorrência foi atualizado.",
-      hora: "Há 30 minutos",
-      lida: false
-    }
-  ]);
+  const [notificacoes, setNotificacoes] = useState([]);
 
   const headerRef = useRef(null);
   const pesquisaInputRef = useRef(null);
@@ -136,23 +141,53 @@ function Header() {
     setPerfilAberto(false);
   }
 
-  function marcarComoLida(id) {
-    setNotificacoes((anteriores) =>
-      anteriores.map((notificacao) =>
-        notificacao.id === id
-          ? { ...notificacao, lida: true }
-          : notificacao
-      )
-    );
+  async function carregarNotificacoes() {
+    try {
+      const lista = await buscarNotificacoes();
+      setNotificacoes(
+        lista.map((n) => ({
+          id: n.id_notificacao,
+          titulo: "Denúncia",
+          mensagem: n.mensagem,
+          hora: formatarHoraNotificacao(n.data_notificacao),
+          lida: Boolean(n.lida)
+        }))
+      );
+    } catch {
+      setNotificacoes([]);
+    }
   }
 
-  function marcarTodasComoLidas() {
+  useEffect(() => {
+    carregarNotificacoes();
+    const intervalo = setInterval(carregarNotificacoes, 60000);
+    return () => clearInterval(intervalo);
+  }, []);
+
+  async function marcarComoLida(id) {
     setNotificacoes((anteriores) =>
-      anteriores.map((notificacao) => ({
-        ...notificacao,
-        lida: true
-      }))
+      anteriores.map((n) => (n.id === id ? { ...n, lida: true } : n))
     );
+    try {
+      await marcarNotificacaoLida(id);
+    } catch {
+      carregarNotificacoes();
+    }
+  }
+
+  async function marcarTodasComoLidas() {
+    setNotificacoes((anteriores) => anteriores.map((n) => ({ ...n, lida: true })));
+    try {
+      await marcarTodasNotificacoesLidas();
+    } catch {
+      carregarNotificacoes();
+    }
+  }
+
+  function sair() {
+    localStorage.removeItem("token");
+    localStorage.removeItem("usuario");
+    navigate("/", { replace: true });
   }
 
   // Atualiza o modo mobile se a largura da tela mudar.
@@ -260,7 +295,7 @@ function Header() {
       <header className="header" ref={headerRef}>
         <div className="header-welcome">
           <h1>
-            Olá, Administrador! <span>👋</span>
+            Olá, {primeiroNome}! <span>👋</span>
           </h1>
 
           <p>Aqui está o resumo das denúncias de hoje.</p>
@@ -423,13 +458,13 @@ function Header() {
               className="header-profile"
               onClick={alternarPerfil}
               aria-expanded={perfilAberto}
-              aria-label="Abrir menu do administrador"
+              aria-label="Abrir menu do perfil"
             >
-              <div className="profile-avatar">A</div>
+              <div className="profile-avatar">{iniciais}</div>
 
               <div className="profile-info">
-                <strong>Administrador</strong>
-                <span>Perfil</span>
+                <strong>{nomeUsuario}</strong>
+                <span>{rotuloPerfil}</span>
               </div>
 
               <FaChevronDown
@@ -442,11 +477,11 @@ function Header() {
             {perfilAberto && (
               <div className="header-popup profile-popup">
                 <div className="profile-popup-info">
-                  <div className="profile-avatar">A</div>
+                  <div className="profile-avatar">{iniciais}</div>
 
                   <div>
-                    <strong>Administrador</strong>
-                    <p>Conta administrativa</p>
+                    <strong>{nomeUsuario}</strong>
+                    <p>{rotuloPerfil}</p>
                   </div>
                 </div>
 
@@ -457,9 +492,7 @@ function Header() {
                   className="profile-menu-item"
                   onClick={() => {
                     setPerfilAberto(false);
-                    alert(
-                      "A tela Meu Perfil será implementada na próxima etapa."
-                    );
+                    navigate("/admin/configuracoes");
                   }}
                 >
                   <FaUser />
@@ -471,9 +504,7 @@ function Header() {
                   className="profile-menu-item"
                   onClick={() => {
                     setPerfilAberto(false);
-                    alert(
-                      "A função Sair será conectada ao sistema de login."
-                    );
+                    sair();
                   }}
                 >
                   <FaSignOutAlt />
@@ -634,11 +665,11 @@ function Header() {
               {perfilAberto && (
                 <div className="mobile-panel-content">
                   <div className="mobile-panel-profile">
-                    <div className="profile-avatar">A</div>
+                    <div className="profile-avatar">{iniciais}</div>
 
                     <div>
-                      <strong>Administrador</strong>
-                      <p>Conta administrativa</p>
+                      <strong>{nomeUsuario}</strong>
+                      <p>{rotuloPerfil}</p>
                     </div>
                   </div>
 
@@ -647,9 +678,7 @@ function Header() {
                     className="profile-menu-item"
                     onClick={() => {
                       fecharPainel();
-                      alert(
-                        "A tela Meu Perfil será implementada na próxima etapa."
-                      );
+                      navigate("/admin/configuracoes");
                     }}
                   >
                     <FaUser />
@@ -661,9 +690,7 @@ function Header() {
                     className="profile-menu-item"
                     onClick={() => {
                       fecharPainel();
-                      alert(
-                        "A função Sair será conectada ao sistema de login."
-                      );
+                      sair();
                     }}
                   >
                     <FaSignOutAlt />

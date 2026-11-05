@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { buscarOcorrenciasCompletas } from "../dados";
 
 import {
   FaSearch,
@@ -20,53 +22,37 @@ function ListadeDenuncias() {
   const [filtroPrioridade, setFiltroPrioridade] = useState("");
   const [filtroStatus, setFiltroStatus] = useState("");
 
-  const denuncias = [
-    {
-      id: 124,
-      problema: "Vazamento de água",
-      descricao:
-        "Foi identificado um vazamento de água próximo à residência.",
-      cidade: "Criciúma",
-      bairro: "Rio Maina",
-      rua: "Rua Vila Isabel",
-      prioridade: "Média",
-      status: "Em análise",
-      data: "22/09/2026",
-      hora: "10:30",
-      ia: true
-    },
-    {
-      id: 123,
-      problema: "Buraco na via",
-      descricao:
-        "Buraco localizado no meio da via, dificultando a passagem de veículos.",
-      cidade: "Criciúma",
-      bairro: "Centro",
-      rua: "Rua João Pessoa",
-      prioridade: "Alta",
-      status: "Aberta",
-      data: "22/09/2026",
-      hora: "09:45",
-      ia: false
-    },
-    {
-      id: 122,
-      problema: "Iluminação pública",
-      descricao:
-        "Poste de iluminação aparentemente apagado durante a noite.",
-      cidade: "Criciúma",
-      bairro: "Próspera",
-      rua: "Rua das Palmeiras",
-      prioridade: "Baixa",
-      status: "Resolvida",
-      data: "21/09/2026",
-      hora: "18:20",
-      ia: true
-    }
-  ];
+  const navigate = useNavigate();
+  const [denuncias, setDenuncias] = useState([]);
+  const [erroCarga, setErroCarga] = useState("");
 
-  
-// pesquisa
+  useEffect(() => {
+    buscarOcorrenciasCompletas()
+      .then((lista) =>
+        setDenuncias(
+          lista.slice(0, 10).map((o) => ({
+            id: o.id,
+            problema: o.titulo,
+            descricao: o.descricao,
+            categoria: o.categoria,
+            cidade: o.cidade,
+            bairro: o.bairro,
+            rua: o.rua,
+            prioridade: o.prioridade,
+            status: o.status,
+            data: o.data ? o.data.toLocaleDateString("pt-BR") : "",
+            hora: o.data
+              ? o.data.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+              : "",
+            analise: o.impacto,
+            ia: Boolean(o.impacto)
+          }))
+        )
+      )
+      .catch(() => setErroCarga("Não foi possível carregar as denúncias."));
+  }, []);
+
+  // pesquisa
 
 const denunciasFiltradas = denuncias.filter((denuncia) =>
   denuncia.problema
@@ -96,7 +82,7 @@ const denunciasFiltradas = denuncias.filter((denuncia) =>
           </p>
         </div>
 
-        <button className="btn-ver-todas">
+        <button className="btn-ver-todas" onClick={() => navigate("/admin/denuncias")}>
           Ver todas
           <FaChevronRight />
         </button>
@@ -244,6 +230,7 @@ const denunciasFiltradas = denuncias.filter((denuncia) =>
 
       </div>
 
+      {erroCarga && <p className="denuncia-vazio">{erroCarga}</p>}
       {denunciaSelecionada && (
 
         <div
@@ -417,51 +404,15 @@ const denunciasFiltradas = denuncias.filter((denuncia) =>
 
 
               <div className="ia-conteudo">
-
-
                 <div>
-
-                  <h4>
-                    Resumo
-                  </h4>
-
-                  <p>
-                    A análise da denúncia será apresentada
-                    aqui após o processamento pela inteligência
-                    artificial.
-                  </p>
-
-                </div>
-
-
-                <div>
-
                   <h4>
                     Análise
                   </h4>
-
                   <p>
-                    O Gemini irá analisar as informações
-                    fornecidas pelo cidadão.
+                    {denunciaSelecionada.analise ||
+                      "Esta denúncia ainda não foi analisada pela inteligência artificial."}
                   </p>
-
                 </div>
-
-
-                <div>
-
-                  <h4>
-                    Recomendação
-                  </h4>
-
-                  <p>
-                    As recomendações geradas pela IA aparecerão
-                    nesta seção.
-                  </p>
-
-                </div>
-
-
               </div>
 
             </div>

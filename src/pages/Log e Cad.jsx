@@ -39,7 +39,8 @@ function LogeCad() {
     setCarregando(true);
 
     try {
-      const url = modo === "login" ? `${API_URL}/login` : `${API_URL}/usuario`;
+      // O cadastro público cria apenas contas de funcionário
+      const url = modo === "login" ? `${API_URL}/login` : `${API_URL}/cadastro`;
       const corpo = modo === "login"
         ? { email, senha }
         : { nome, email, senha };
@@ -61,7 +62,8 @@ function LogeCad() {
         const { token, ...usuario } = dados;
         localStorage.setItem("token", token);
         localStorage.setItem("usuario", JSON.stringify(usuario));
-        navigate(dados.cargo === "Administrador" ? "/admin" : "/home");
+        const administrador = dados.perfil === "Administrador" || dados.cargo === "Administrador";
+        navigate(administrador ? "/admin" : "/home");
       } else {
         setSucesso("Cadastro realizado! Agora faça login.");
         setModo("login");

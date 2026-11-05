@@ -239,7 +239,7 @@ function abrirNoGoogleMaps() {
                 <span className="indicador-icone roxo">◎</span>
               </div>
               <strong>{total}</strong>
-              <small>Registros demonstrativos</small>
+              <small>Registros com localização</small>
             </div>
 
             <div className="mapa-indicador">
@@ -560,17 +560,12 @@ function abrirNoGoogleMaps() {
                   </button>
                 ))
               )}
-
-              <p className="mapa-aviso">
-                Dados demonstrativos. A conexão com o banco de dados
-                será feita posteriormente.
-              </p>
             </aside>
           </div>
 
           <div className="mapa-rodape">
             <span>Central de monitoramento urbano</span>
-            <span>Dados demonstrativos</span>
+            <span>Dados do banco de dados</span>
           </div>
         </section>
       </main>

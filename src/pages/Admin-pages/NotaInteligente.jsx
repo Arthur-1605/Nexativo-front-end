@@ -18,7 +18,7 @@ import {
 
 import Sidebar from "../../components/Sidebar";
 import { API_URL } from "../../api";
-import { buscarNotas, criarNota, removerNota } from "../../dados";
+import { buscarNotas, criarNota, removerNota, transcreverImagem } from "../../dados";
 import Header from "../../components/Header";
 
 import "./AdminPaginas.css";
@@ -40,6 +40,7 @@ function Notas() {
 
   const [foto, setFoto] = useState(null);
   const [transcricao, setTranscricao] = useState("");
+  const [transcrevendo, setTranscrevendo] = useState(false);
   const [mensagemFoto, setMensagemFoto] = useState("");
 
   const inputArquivoRef = useRef(null);
@@ -150,6 +151,23 @@ function Notas() {
     setMensagemFoto("");
     if (inputArquivoRef.current) inputArquivoRef.current.value = "";
     if (inputCameraRef.current) inputCameraRef.current.value = "";
+  }
+
+  async function transcreverFoto() {
+    if (!foto?.arquivo) return;
+
+    setTranscrevendo(true);
+    setMensagemFoto("");
+
+    try {
+      const { texto } = await transcreverImagem(foto.arquivo);
+      setTranscricao(texto);
+      setMensagemFoto("Texto transcrito. Confira antes de salvar.");
+    } catch (erro) {
+      setMensagemFoto(erro.message || "Não foi possível transcrever a imagem.");
+    } finally {
+      setTranscrevendo(false);
+    }
   }
 
   async function copiarTranscricao() {
@@ -405,8 +423,8 @@ function Notas() {
                       <div>
                         <h3>Texto transcrito</h3>
                         <p>
-                          Você também pode digitar ou colar o texto
-                          manualmente neste campo.
+                          A IA lê a foto e preenche este campo. Você pode
+                          revisar, editar ou digitar o texto manualmente.
                         </p>
                       </div>
                       <span>EDITÁVEL</span>
@@ -416,13 +434,21 @@ function Notas() {
                       className="notas-transcricao"
                       value={transcricao}
                       onChange={(e) => setTranscricao(e.target.value)}
-                      placeholder="A transcrição aparecerá aqui quando a IA estiver conectada. Por enquanto, você pode escrever ou colar o texto manualmente."
+                      placeholder="Clique em “Transcrever com IA” para ler a foto, ou escreva o texto manualmente."
                       rows={8}
                     />
 
                     <div className="notas-editor-rodape">
                       <span>{transcricao.length} caracteres</span>
                       <div className="notas-acoes-transcricao">
+                        <button
+                          type="button"
+                          className="notas-botao-secundario"
+                          onClick={transcreverFoto}
+                          disabled={!foto || transcrevendo}
+                        >
+                          {transcrevendo ? "Transcrevendo..." : "Transcrever com IA"}
+                        </button>
                         <button
                           type="button"
                           className="notas-botao-secundario"

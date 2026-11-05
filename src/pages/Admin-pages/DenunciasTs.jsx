@@ -1,6 +1,20 @@
 
 import { useMemo, useState, useEffect, useRef } from "react";
-import { API_URL } from "../../api";
+import {
+  buscarOcorrenciasCompletas,
+  buscarCategorias,
+  criarOcorrenciaPainel,
+  atualizarOcorrencia as atualizarOcorrenciaBD,
+  excluirOcorrencia as excluirOcorrenciaBD,
+  registrarHistorico as registrarHistoricoBD,
+  buscarObservacoes as buscarObservacoesBD,
+  criarObservacao as criarObservacaoBD,
+  buscarTarefas as buscarTarefasBD,
+  criarTarefa as criarTarefaBD,
+  atualizarTarefa as atualizarTarefaBD,
+  excluirTarefa as excluirTarefaBD,
+  buscarHistorico as buscarHistoricoBD,
+} from "../../dados";
 import {
   FaSearch,
   FaTimes,
@@ -23,73 +37,6 @@ import Header from "../../components/Header";
 
 import "./AdminPaginas.css";
 import "./DenunciaTs.css";
-
-const dataInicial = [
-  {
-    id: 124,
-    titulo: "Vazamento de água",
-    categoria: "Abastecimento",
-    cidade: "Criciúma",
-    bairro: "Rio Maina",
-    rua: "Rua Vila Isabel",
-    descricao:
-      "Vazamento próximo às residências, causando desperdício de água.",
-    prioridade: "Alta",
-    status: "Em análise",
-    responsavel: "Carlos Silva",
-    prazo: "2026-10-20",
-    estimado: 1500,
-    aprovado: 1500,
-    gasto: 350,
-    observacoes: [],
-    historico: [],
-    tarefas: [
-      { id: 1, titulo: "Verificar a localização", concluida: true },
-      { id: 2, titulo: "Agendar vistoria técnica", concluida: false },
-    ],
-  },
-  {
-    id: 123,
-    titulo: "Buraco na via",
-    categoria: "Infraestrutura",
-    cidade: "Criciúma",
-    bairro: "Centro",
-    rua: "Rua João Pessoa",
-    descricao: "Buraco na pista dificultando a circulação de veículos.",
-    prioridade: "Alta",
-    status: "Aberta",
-    responsavel: "",
-    prazo: "2026-10-15",
-    estimado: 2500,
-    aprovado: 0,
-    gasto: 0,
-    observacoes: [],
-    historico: [],
-    tarefas: [],
-  },
-  {
-    id: 122,
-    titulo: "Iluminação pública",
-    categoria: "Iluminação",
-    cidade: "Criciúma",
-    bairro: "Próspera",
-    rua: "Rua das Palmeiras",
-    descricao: "Poste com iluminação inoperante.",
-    prioridade: "Baixa",
-    status: "Resolvida",
-    responsavel: "Marcos Souza",
-    prazo: "2026-10-10",
-    estimado: 500,
-    aprovado: 450,
-    gasto: 420,
-    observacoes: [],
-    historico: [],
-    tarefas: [
-      { id: 1, titulo: "Verificar lâmpada", concluida: true },
-      { id: 2, titulo: "Confirmar reparo", concluida: true },
-    ],
-  },
-];
 
 const moeda = (valor) =>
   Number(valor || 0).toLocaleString("pt-BR", {
@@ -138,6 +85,9 @@ function DenunciasTs() {
     const [novaPrioridade, setNovaPrioridade] = useState("Média");
 
     const [mensagem, setMensagem] = useState("");
+    const [categorias, setCategorias] = useState([]);
+    const [novaCategoria, setNovaCategoria] = useState("");
+    const [novaCidade, setNovaCidade] = useState("");
     const temporizadorMensagem = useRef(null);
     
 
@@ -145,64 +95,44 @@ function DenunciasTs() {
       try {
         setCarregando(true);
         setErroAPI("");
-
-        const resposta = await fetch(`${API_URL}/ocorrencias`);
-
-        if (!resposta.ok) {
-          throw new Error(`Erro HTTP ${resposta.status}`);
-        }
-
-        const dados = await resposta.json();
-
-        const lista = Array.isArray(dados)
-          ? dados
-          : dados.ocorrencias ?? dados.dados ?? [];
-
-        if (!Array.isArray(lista)) {
-          throw new Error("A API não retornou uma lista de ocorrências.");
-        }
-
-        const formatadas = lista.map((item) => ({
-          ...item,
-          id: item.id ?? item.id_ocorrencia,
-          titulo: item.titulo ?? "Ocorrência sem título",
-          categoria: item.categoria ?? item.nome_categoria ?? "Não informada",
-          cidade: item.cidade ?? "Não informada",
-          bairro: item.bairro ?? "Não informado",
-          rua: item.rua ?? item.localizacao ?? "Não informada",
-          descricao: item.descricao ?? "Sem descrição",
-          prioridade: item.prioridade ?? "Média",
-          status: item.status ?? "Aberta",
-          responsavel: item.responsavel ?? "",
-          prazo: item.prazo ?? "",
-          estimado: Number(item.estimado ?? 0),
-          aprovado: Number(item.aprovado ?? 0),
-          gasto: Number(item.gasto ?? 0),
-          observacoes: Array.isArray(item.observacoes)
-            ? item.observacoes
-            : [],
-          historico: Array.isArray(item.historico)
-            ? item.historico
-            : [],
-          tarefas: Array.isArray(item.tarefas)
-            ? item.tarefas
-            : [],
-        }));
-
-        setDenuncias(formatadas);
+        const lista = await buscarOcorrenciasCompletas();
+        // Mantém o que já foi carregado de observações, tarefas e histórico
+        setDenuncias((anteriores) => {
+          const antigas = new Map(anteriores.map((d) => [d.id, d]));
+          return lista.map((item) => {
+            const antiga = antigas.get(item.id);
+            return {
+              ...item,
+              estimado: item.orcamentoEstimado,
+              aprovado: item.orcamentoAprovado,
+              gasto: item.orcamentoGasto,
+              observacoes: antiga?.observacoes ?? [],
+              historico: antiga?.historico ?? [],
+              tarefas: antiga?.tarefas ?? [],
+            };
+          });
+        });
       } catch (erro) {
         console.error("Erro ao carregar ocorrências:", erro);
-
         setErroAPI(
-          "Não foi possível carregar as ocorrências. Verifique se o servidor está ligado e se a rota /ocorrencias existe."
+          erro.message || "Não foi possível carregar as ocorrências. Verifique se o servidor está ligado."
         );
       } finally {
         setCarregando(false);
       }
     };
 
+    const carregarCategorias = async () => {
+      try {
+        setCategorias(await buscarCategorias());
+      } catch {
+        setCategorias([]);
+      }
+    };
+
     useEffect(() => {
       carregarDenuncias();
+      carregarCategorias();
     }, []);
 
     useEffect(() => {
@@ -227,51 +157,101 @@ function DenunciasTs() {
 
 // Mantenha as outras funções do componente abaixo.
 
-const registrarHistorico = (denuncia, texto) => ({
-  ...denuncia,
-  historico: [
-    {
-      id: Date.now() + Math.random(),
-      texto,
-      data: new Date().toLocaleString("pt-BR"),
-    },
-    ...(denuncia.historico || []),
-  ],
-});
-
   const atrasada = (denuncia) =>
     denuncia.status !== "Resolvida" &&
     Boolean(denuncia.prazo) &&
     denuncia.prazo < hoje();
 
-  const atualizarDenuncia = (id, alteracoes, acao = "") => {
+  // Atualiza só na tela (campos que ainda serão confirmados ao sair do campo)
+  const editarLocal = (id, alteracoes) => {
     setDenuncias((anteriores) =>
-      anteriores.map((denuncia) => {
-        if (denuncia.id !== id) return denuncia;
-
-        let atualizada = { ...denuncia, ...alteracoes };
-
-        if (acao) {
-          atualizada = registrarHistorico(atualizada, acao);
-        }
-
-        return atualizada;
-      })
+      anteriores.map((d) => (d.id === id ? { ...d, ...alteracoes } : d))
     );
+    setSelecionada((anterior) =>
+      anterior && anterior.id === id ? { ...anterior, ...alteracoes } : anterior
+    );
+  };
 
-    setSelecionada((anterior) => {
-      if (!anterior || anterior.id !== id) return anterior;
+  // Carrega observações, tarefas e histórico da ocorrência no banco
+  const carregarDetalhes = async (id) => {
+    try {
+      const [observacoes, tarefas, historico] = await Promise.all([
+        buscarObservacoesBD(id),
+        buscarTarefasBD(id),
+        buscarHistoricoBD(id),
+      ]);
 
-      let atualizada = { ...anterior, ...alteracoes };
+      const detalhes = {
+        observacoes: observacoes.map((o) => ({
+          id: o.id_observacao,
+          texto: o.texto,
+          autor: o.usuario_nome || "",
+          data: new Date(o.data_criacao).toLocaleString("pt-BR"),
+        })),
+        tarefas: tarefas.map((t) => ({
+          id: t.id_tarefa,
+          titulo: t.titulo,
+          concluida: t.concluida,
+        })),
+        historico: historico.map((h) => ({
+          id: h.id_historico,
+          texto: h.observacao ? `${h.novo_status} — ${h.observacao}` : h.novo_status,
+          data: new Date(h.data_alteracao).toLocaleString("pt-BR"),
+        })),
+      };
 
-      if (acao) {
-        atualizada = registrarHistorico(atualizada, acao);
+      setDenuncias((anteriores) =>
+        anteriores.map((d) => (d.id === id ? { ...d, ...detalhes } : d))
+      );
+      setSelecionada((anterior) =>
+        anterior && anterior.id === id ? { ...anterior, ...detalhes } : anterior
+      );
+    } catch (erro) {
+      avisar(erro.message || "Não foi possível carregar os detalhes da ocorrência.");
+    }
+  };
+
+  // Grava no banco os campos alterados e registra a ação no histórico
+  const atualizarDenuncia = async (id, alteracoes, acao = "") => {
+    editarLocal(id, alteracoes);
+
+    const mapa = {
+      status: "status",
+      prioridade: "prioridade",
+      responsavel: "responsavel",
+      prazo: "prazo",
+      estimado: "orcamento_estimado",
+      aprovado: "orcamento_aprovado",
+      gasto: "orcamento_gasto",
+    };
+
+    const payload = {};
+    for (const [campo, valor] of Object.entries(alteracoes)) {
+      if (mapa[campo]) payload[mapa[campo]] = valor;
+    }
+
+    const statusAtual =
+      denuncias.find((d) => d.id === id)?.status || "Aberta";
+
+    try {
+      if (payload.status !== undefined) {
+        // O servidor registra a mudança de status no histórico com a observação
+        await atualizarOcorrenciaBD(id, { ...payload, observacao: acao || undefined });
+      } else {
+        if (Object.keys(payload).length) {
+          await atualizarOcorrenciaBD(id, payload);
+        }
+        if (acao) {
+          await registrarHistoricoBD({ id, status: statusAtual }, statusAtual, acao);
+        }
       }
 
-      return atualizada;
-    });
-
-    if (acao) avisar(acao);
+      if (acao) avisar(acao);
+      await carregarDetalhes(id);
+    } catch (erro) {
+      avisar(erro.message || "Não foi possível salvar a alteração.");
+      await carregarDenuncias();
+    }
   };
 
   const filtradas = useMemo(() => {
@@ -354,136 +334,92 @@ const registrarHistorico = (denuncia, texto) => ({
     0
   );
 
-  const adicionarDenuncia = (e) => {
+  const adicionarDenuncia = async (e) => {
     e.preventDefault();
 
-    if (!novoTitulo.trim() || !novoLocal.trim()) {
-      avisar("Preencha o título e a localização.");
+    if (!novaCategoria || !novoTitulo.trim() || !novoLocal.trim() || !novaCidade.trim()) {
+      avisar("Preencha categoria, título, cidade e localização.");
       return;
     }
 
-    const nova = {
-      id: Math.max(0, ...denuncias.map((d) => d.id)) + 1,
-      titulo: novoTitulo.trim(),
-      categoria: "Nova ocorrência",
-      cidade: "Criciúma",
-      bairro: novoBairro.trim() || "Não informado",
-      rua: novoLocal.trim(),
-      descricao: novaDescricao.trim() || "Sem descrição informada.",
-      prioridade: novaPrioridade,
-      status: "Aberta",
-      responsavel: "",
-      prazo: "",
-      estimado: 0,
-      aprovado: 0,
-      gasto: 0,
-      observacoes: [],
-      historico: [],
-      tarefas: [],
-    };
+    try {
+      await criarOcorrenciaPainel({
+        id_categoria: Number(novaCategoria),
+        titulo: novoTitulo.trim(),
+        descricao: novaDescricao.trim(),
+        prioridade: novaPrioridade,
+        rua: novoLocal.trim(),
+        bairro: novoBairro.trim() || "Não informado",
+        cidade: novaCidade.trim(),
+      });
 
-    const comHistorico = registrarHistorico(
-      nova,
-      "Ocorrência cadastrada no painel."
-    );
-
-    setDenuncias((anteriores) => [comHistorico, ...anteriores]);
-    setMostrarFormulario(false);
-    setNovoTitulo("");
-    setNovoLocal("");
-    setNovoBairro("");
-    setNovaDescricao("");
-    setNovaPrioridade("Média");
-
-    avisar("Ocorrência adicionada com sucesso.");
+      setMostrarFormulario(false);
+      setNovaCategoria("");
+      setNovaCidade("");
+      setNovoTitulo("");
+      setNovoLocal("");
+      setNovoBairro("");
+      setNovaDescricao("");
+      setNovaPrioridade("Média");
+      avisar("Ocorrência adicionada com sucesso.");
+      await carregarDenuncias();
+    } catch (erro) {
+      avisar(erro.message || "Não foi possível cadastrar a ocorrência.");
+    }
   };
 
-  const adicionarAnotacao = (e) => {
+  const adicionarAnotacao = async (e) => {
     e.preventDefault();
-
     if (!novaAnotacao.trim() || !selecionada) return;
 
-    const anotacao = {
-      id: Date.now(),
-      texto: novaAnotacao.trim(),
-      data: new Date().toLocaleString("pt-BR"),
-    };
-
-    const atualizada = {
-      ...selecionada,
-      observacoes: [anotacao, ...(selecionada.observacoes || [])],
-    };
-
-    const comHistorico = registrarHistorico(
-      atualizada,
-      "Nova observação adicionada."
-    );
-
-    setDenuncias((anteriores) =>
-      anteriores.map((d) =>
-        d.id === comHistorico.id ? comHistorico : d
-      )
-    );
-
-    setSelecionada(comHistorico);
-    setNovaAnotacao("");
-    avisar("Observação registrada.");
+    try {
+      await criarObservacaoBD(selecionada.id, novaAnotacao.trim());
+      setNovaAnotacao("");
+      avisar("Observação registrada.");
+      await carregarDetalhes(selecionada.id);
+    } catch (erro) {
+      avisar(erro.message || "Não foi possível registrar a observação.");
+    }
   };
 
-  const adicionarTarefa = (e) => {
+  const adicionarTarefa = async (e) => {
     e.preventDefault();
-
     if (!novaTarefa.trim() || !selecionada) return;
 
-    const tarefa = {
-      id: Date.now(),
-      titulo: novaTarefa.trim(),
-      concluida: false,
-    };
-
-    const tarefas = [...(selecionada.tarefas || []), tarefa];
-
-    atualizarDenuncia(
-      selecionada.id,
-      { tarefas },
-      `Tarefa criada: ${tarefa.titulo}`
-    );
-
-    setNovaTarefa("");
+    try {
+      await criarTarefaBD(selecionada.id, novaTarefa.trim());
+      setNovaTarefa("");
+      await carregarDetalhes(selecionada.id);
+    } catch (erro) {
+      avisar(erro.message || "Não foi possível criar a tarefa.");
+    }
   };
 
-  const alternarTarefa = (tarefaId) => {
+  const alternarTarefa = async (tarefaId) => {
     if (!selecionada) return;
+    const tarefa = (selecionada.tarefas || []).find((t) => t.id === tarefaId);
+    if (!tarefa) return;
 
-    const tarefas = (selecionada.tarefas || []).map((tarefa) =>
-      tarefa.id === tarefaId
-        ? { ...tarefa, concluida: !tarefa.concluida }
-        : tarefa
-    );
-
-    const tarefa = tarefas.find((t) => t.id === tarefaId);
-
-    atualizarDenuncia(
-      selecionada.id,
-      { tarefas },
-      tarefa
-        ? `${tarefa.concluida ? "Tarefa concluída" : "Tarefa reaberta"}: ${tarefa.titulo}`
-        : "Tarefas atualizadas."
-    );
+    try {
+      await atualizarTarefaBD(tarefaId, { concluida: !tarefa.concluida });
+      avisar(`${!tarefa.concluida ? "Tarefa concluída" : "Tarefa reaberta"}: ${tarefa.titulo}`);
+      await carregarDetalhes(selecionada.id);
+    } catch (erro) {
+      avisar(erro.message || "Não foi possível atualizar a tarefa.");
+    }
   };
 
-  const excluirTarefa = (tarefaId) => {
+  const excluirTarefa = async (tarefaId) => {
     if (!selecionada) return;
+    const tarefa = (selecionada.tarefas || []).find((t) => t.id === tarefaId);
 
-    const tarefasAtuais = selecionada.tarefas || [];
-    const tarefa = tarefasAtuais.find((t) => t.id === tarefaId);
-    const tarefas = tarefasAtuais.filter((t) => t.id !== tarefaId);
-
-    atualizarDenuncia(
-      selecionada.id,
-      { tarefas },
-      `Tarefa removida: ${tarefa?.titulo || "Tarefa"}`
-    );
+    try {
+      await excluirTarefaBD(tarefaId);
+      avisar(`Tarefa removida: ${tarefa?.titulo || "Tarefa"}`);
+      await carregarDetalhes(selecionada.id);
+    } catch (erro) {
+      avisar(erro.message || "Não foi possível excluir a tarefa.");
+    }
   };
 
   const abrirDetalhes = (denuncia) => {
@@ -491,6 +427,7 @@ const registrarHistorico = (denuncia, texto) => ({
     setAba("geral");
     setNovaAnotacao("");
     setNovaTarefa("");
+    carregarDetalhes(denuncia.id);
   };
 
   const fecharDetalhes = () => {
@@ -498,22 +435,18 @@ const registrarHistorico = (denuncia, texto) => ({
     setMensagem("");
   };
 
-  const excluirDenuncia = (id) => {
-    const confirmar = window.confirm(
-      "Tem certeza de que deseja excluir esta ocorrência?"
-    );
-
+  const excluirDenuncia = async (id) => {
+    const confirmar = window.confirm("Tem certeza de que deseja excluir esta ocorrência?");
     if (!confirmar) return;
 
-    setDenuncias((anteriores) =>
-      anteriores.filter((d) => d.id !== id)
-    );
-
-    setSelecionada((anterior) =>
-      anterior?.id === id ? null : anterior
-    );
-
-    avisar("Ocorrência excluída.");
+    try {
+      await excluirOcorrenciaBD(id);
+      setSelecionada((anterior) => (anterior?.id === id ? null : anterior));
+      avisar("Ocorrência excluída.");
+      await carregarDenuncias();
+    } catch (erro) {
+      avisar(erro.message || "Não foi possível excluir a ocorrência.");
+    }
   };
 
   const progresso = (denuncia) => {
@@ -620,7 +553,7 @@ const registrarHistorico = (denuncia, texto) => ({
                 <option value="Todos">Todos os status</option>
                 <option value="Aberta">Aberta</option>
                 <option value="Em análise">Em análise</option>
-                <option value="Em execução">Em execução</option>
+                <option value="Em atendimento">Em atendimento</option>
                 <option value="Resolvida">Resolvida</option>
               </select>
 
@@ -914,6 +847,32 @@ const registrarHistorico = (denuncia, texto) => ({
 
             <form className="denuncia-formulario" onSubmit={adicionarDenuncia}>
               <label>
+                Categoria *
+                <select
+                  value={novaCategoria}
+                  onChange={(e) => setNovaCategoria(e.target.value)}
+                  required
+                >
+                  <option value="">Selecione</option>
+                  {categorias.map((c) => (
+                    <option key={c.id_categoria} value={c.id_categoria}>
+                      {c.nome}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                Cidade *
+                <input
+                  value={novaCidade}
+                  onChange={(e) => setNovaCidade(e.target.value)}
+                  placeholder="Ex.: Criciúma"
+                  required
+                />
+              </label>
+
+              <label>
                 Título da ocorrência *
                 <input
                   value={novoTitulo}
@@ -1050,7 +1009,7 @@ const registrarHistorico = (denuncia, texto) => ({
                     >
                       <option>Aberta</option>
                       <option>Em análise</option>
-                      <option>Em execução</option>
+                      <option>Em atendimento</option>
                       <option>Resolvida</option>
                     </select>
                   </div>
@@ -1139,14 +1098,14 @@ const registrarHistorico = (denuncia, texto) => ({
                         value={selecionada.responsavel || ""}
                         placeholder="Nome do responsável"
                         onChange={(e) =>
-                          atualizarDenuncia(selecionada.id, {
+                          editarLocal(selecionada.id, {
                             responsavel: e.target.value,
                           })
                         }
                         onBlur={() =>
                           atualizarDenuncia(
                             selecionada.id,
-                            {},
+                            { responsavel: selecionada.responsavel || "" },
                             `Responsável definido: ${selecionada.responsavel || "Não definido"}.`
                           )
                         }
@@ -1249,14 +1208,14 @@ const registrarHistorico = (denuncia, texto) => ({
                           step="0.01"
                           value={selecionada[campo] ?? 0}
                           onChange={(e) =>
-                            atualizarDenuncia(selecionada.id, {
+                            editarLocal(selecionada.id, {
                               [campo]: Math.max(0, Number(e.target.value) || 0),
                             })
                           }
                           onBlur={() =>
                             atualizarDenuncia(
                               selecionada.id,
-                              {},
+                              { [campo]: selecionada[campo] ?? 0 },
                               `${rotulo} atualizado: ${moeda(selecionada[campo])}.`
                             )
                           }

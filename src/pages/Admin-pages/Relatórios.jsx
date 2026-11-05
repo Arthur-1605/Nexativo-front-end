@@ -1,5 +1,6 @@
  
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { buscarOcorrenciasCompletas } from "../../dados";
 import { FaDownload, FaChartBar, FaFileAlt, FaFilePdf } from "react-icons/fa";
 import Sidebar from "../../components/Sidebar";
 import Header from "../../components/Header";
@@ -7,27 +8,51 @@ import "./AdminPaginas.css";
 import "./Relatorios.css";
  
  
-const dadosExemplo = [
-  { id: 124, titulo: "Vazamento de água", categoria: "Abastecimento", status: "Aberta", data: "2026-10-18" },
-  { id: 123, titulo: "Bueiro obstruído", categoria: "Drenagem", status: "Em atendimento", data: "2026-10-17" },
-  { id: 122, titulo: "Poste danificado", categoria: "Iluminação", status: "Resolvida", data: "2026-10-16" },
-  { id: 121, titulo: "Acúmulo de água", categoria: "Drenagem", status: "Aberta", data: "2026-10-15" },
-  { id: 120, titulo: "Vazamento na rua", categoria: "Abastecimento", status: "Resolvida", data: "2026-10-12" },
-  { id: 119, titulo: "Lâmpada apagada", categoria: "Iluminação", status: "Em atendimento", data: "2026-10-10" },
-];
+// Data local no formato AAAA-MM-DD
+const diaLocal = (data) => {
+  if (!data) return "";
+  const ano = data.getFullYear();
+  const mes = String(data.getMonth() + 1).padStart(2, "0");
+  const dia = String(data.getDate()).padStart(2, "0");
+  return `${ano}-${mes}-${dia}`;
+};
  
 function Relatorios() {
+  const [ocorrencias, setOcorrencias] = useState([]);
+  const [erro, setErro] = useState("");
   const [periodo, setPeriodo] = useState("todos");
   const [categoria, setCategoria] = useState("Todas");
+
+  useEffect(() => {
+    buscarOcorrenciasCompletas()
+      .then((lista) => {
+        setOcorrencias(
+          lista.map((o) => ({
+            id: o.id,
+            titulo: o.titulo,
+            categoria: o.categoria,
+            status: o.status,
+            data: diaLocal(o.data),
+          }))
+        );
+        setErro("");
+      })
+      .catch(() => setErro("Não foi possível carregar as ocorrências."));
+  }, []);
+
+  const categorias = useMemo(
+    () => [...new Set(ocorrencias.map((o) => o.categoria))].sort(),
+    [ocorrencias]
+  );
  
   const dados = useMemo(() => {
-    const hoje = new Date("2026-10-19T12:00:00");
+    const hoje = new Date();
     const limite = new Date(hoje);
  
     if (periodo === "7") limite.setDate(hoje.getDate() - 7);
     if (periodo === "30") limite.setDate(hoje.getDate() - 30);
  
-    return dadosExemplo.filter((item) => {
+    return ocorrencias.filter((item) => {
       const dataItem = new Date(`${item.data}T12:00:00`);
       const dentroPeriodo = periodo === "todos" || dataItem >= limite;
       const dentroCategoria =
@@ -35,7 +60,7 @@ function Relatorios() {
  
       return dentroPeriodo && dentroCategoria;
     });
-  }, [periodo, categoria]);
+  }, [ocorrencias, periodo, categoria]);
  
   const total = dados.length;
   const abertas = dados.filter((item) => item.status === "Aberta").length;
@@ -46,8 +71,7 @@ function Relatorios() {
     (item) => item.status === "Resolvida"
   ).length;
  
-  const categorias = ["Abastecimento", "Drenagem", "Iluminação"];
-  const status = ["Aberta", "Em atendimento", "Resolvida"];
+  const status = ["Aberta", "Em análise", "Em atendimento", "Resolvida"];
  
   function exportarCSV() {
     const cabecalho = ["ID", "Título", "Categoria", "Status", "Data"];
@@ -125,7 +149,7 @@ function Relatorios() {
                 value={periodo}
                 onChange={(e) => setPeriodo(e.target.value)}
               >
-                <option value="todos">Todo o período demonstrativo</option>
+                <option value="todos">Todo o período</option>
                 <option value="7">Últimos 7 dias</option>
                 <option value="30">Últimos 30 dias</option>
               </select>
@@ -280,7 +304,7 @@ function Relatorios() {
             </div>
  
             <small className="relatorio-aviso">
-              Dados demonstrativos — ainda não conectados ao banco de dados.
+              {erro || "Dados em tempo real do banco de dados."}
             </small>
           </article>
         </section>

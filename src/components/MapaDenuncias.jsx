@@ -1,5 +1,6 @@
 
 import { useEffect, useMemo, useState } from "react";
+import { buscarPontosMapa } from "../dados";
 import L from "leaflet";
 
 import {
@@ -13,17 +14,6 @@ import {
 
 import "leaflet/dist/leaflet.css";
 import "./MapaDenuncias.css";
-
-const ocorrenciasPadrao = [
-  {
-    id: 124,
-    titulo: "Vazamento de água",
-    gravidade: "Alta",
-    status: "Aberta",
-    endereco: "Criciúma",
-    posicao: [-28.6775, -49.3697],
-  },
-];
 
 function criarIconeDenuncia(gravidade) {
   const nivel = String(gravidade || "")
@@ -91,8 +81,18 @@ function MapaDenuncias({
   habilitarRotas = true,
 }) {
 
-  const listaOcorrencias =
-    ocorrencias === undefined ? ocorrenciasPadrao : ocorrencias;
+  // Sem lista vinda da tela pai, carrega os pontos reais do banco
+  const [pontosBanco, setPontosBanco] = useState([]);
+
+  useEffect(() => {
+    if (ocorrencias !== undefined) return;
+
+    buscarPontosMapa()
+      .then(setPontosBanco)
+      .catch(() => setPontosBanco([]));
+  }, [ocorrencias]);
+
+  const listaOcorrencias = ocorrencias === undefined ? pontosBanco : ocorrencias;
 
   const [origem, setOrigem] = useState(null);
   const [rota, setRota] = useState(null);

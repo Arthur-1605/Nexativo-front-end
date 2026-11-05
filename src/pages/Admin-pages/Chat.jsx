@@ -1,6 +1,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
+import { API_URL } from "../../api";
 import {
   FaComments,
   FaPaperPlane,
@@ -43,7 +44,7 @@ function Chat() {
       return undefined;
     }
 
-    const socket = io("http://localhost:3000", {
+    const socket = io(API_URL, {
       auth: { id_usuario: idUsuario },
     });
     socketRef.current = socket;

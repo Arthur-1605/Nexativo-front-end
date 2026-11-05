@@ -10,7 +10,7 @@ export async function listarHistorico(idOcorrencia) {
             u.nome AS usuario_nome
         FROM historico_ocorrencias h
 
-        INNER JOIN usuarios u
+        LEFT JOIN usuarios u
             ON h.id_usuario = u.id_usuario
 
         WHERE h.id_ocorrencia = ?
@@ -37,7 +37,7 @@ export async function criarHistorico(dados) {
         VALUES (?, ?, ?, ?, ?)`,
         [
             dados.id_ocorrencia,
-            dados.id_usuario,
+            dados.id_usuario ?? null,
             dados.status_anterior || null,
             dados.novo_status,
             dados.observacao || null

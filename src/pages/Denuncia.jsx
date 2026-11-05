@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { API_URL } from "../api";
+import { buscarCategorias } from "../dados";
 import "./Denuncia.css";
 
 const MAX_DESCRICAO = 500;
@@ -11,10 +12,6 @@ const ETAPAS = [
   { id: "problema", titulo: "O problema", campos: ["categoria", "descricao", "gravidade"] },
 ];
 const ULTIMA = ETAPAS.length - 1;
-const CATEGORIAS = [
-  "Vazamento de água ou esgoto", "Buraco ou rua danificada", "Iluminação pública",
-  "Lixo ou entulho acumulado", "Alagamento ou drenagem", "Árvores e áreas verdes", "Outro assunto",
-];
 const GRAVIDADES = [
   { value: "baixa", nivel: 1, titulo: "Pode esperar", desc: "Incomoda, mas não há risco agora." },
   { value: "media", nivel: 2, titulo: "Merece atenção", desc: "Atrapalha o dia a dia de quem passa por ali." },
@@ -34,6 +31,8 @@ function Denuncia() {
   const [coords, setCoords] = useState(null);
   const [msgLocal, setMsgLocal] = useState("");
   const [copiado, setCopiado] = useState(false);
+  const [categorias, setCategorias] = useState([]);
+  const [erroCategorias, setErroCategorias] = useState("");
   const tituloRef = useRef(null);
   const ultimoCep = useRef("");
   const enviando = useRef(false);
@@ -41,6 +40,13 @@ function Denuncia() {
   const descricao = watch("descricao") ?? "";
 
   useEffect(() => { tituloRef.current?.focus(); }, [etapa, enviado]);
+
+  // Categorias ativas cadastradas pelo administrador
+  useEffect(() => {
+    buscarCategorias()
+      .then((lista) => setCategorias(lista.filter((c) => c.status === "Ativa")))
+      .catch(() => setErroCategorias("Não foi possível carregar os tipos de problema agora."));
+  }, []);
 
   async function buscarCep(e) {
     const cep = e.target.value.replace(/\D/g, "");
@@ -95,8 +101,9 @@ function Denuncia() {
       id_usuario: usuarioId,
       nome: dados.anonimo ? "" : (dados.nome ?? "").trim(),
       anonimo: Boolean(dados.anonimo),
-      categoria: dados.categoria,
-      titulo: `${dados.categoria}: ${dados.descricao.trim().slice(0, 90)}`,
+      id_categoria: Number(dados.categoria),
+      categoria: categorias.find((c) => String(c.id_categoria) === String(dados.categoria))?.nome || "",
+      titulo: `${categorias.find((c) => String(c.id_categoria) === String(dados.categoria))?.nome || "Relato"}: ${dados.descricao.trim().slice(0, 90)}`,
       descricao: dados.descricao.trim(),
       gravidade: dados.gravidade,
       prioridade: dados.gravidade,
@@ -149,7 +156,7 @@ function Denuncia() {
         <div className="local"><button type="button" className="botao botao--contorno" onClick={marcarMinhaPosicao}>⌖ Estou no local, marcar minha posição</button><small className={`dica${coords ? " dica--ok" : ""}`} aria-live="polite">{msgLocal || "Opcional. Ajuda a equipe a encontrar o ponto no mapa."}</small></div>
       </section>
       <section hidden={etapa !== 2} className="etapa"><h2 ref={etapa === 2 ? tituloRef : null} tabIndex={-1}>O que você viu?</h2><p className="etapa__apoio">Conte do seu jeito. Diga há quanto tempo acontece e quem é afetado.</p>
-        <div className="campo"><label htmlFor="categoria">Que tipo de problema é?</label><select id="categoria" aria-invalid={!!errors.categoria} {...register("categoria", { required: "Escolha uma categoria." })}><option value="">Escolha uma opção</option>{CATEGORIAS.map(c => <option key={c} value={c}>{c}</option>)}</select>{errors.categoria && <small className="erro">{errors.categoria.message}</small>}</div>
+        <div className="campo"><label htmlFor="categoria">Que tipo de problema é?</label><select id="categoria" aria-invalid={!!errors.categoria} {...register("categoria", { required: "Escolha uma categoria." })}><option value="">Escolha uma opção</option>{categorias.map(c => <option key={c.id_categoria} value={c.id_categoria}>{c.nome}</option>)}</select>{erroCategorias && <small className="erro">{erroCategorias}</small>}{errors.categoria && <small className="erro">{errors.categoria.message}</small>}</div>
         <div className="campo"><label htmlFor="descricao">Descreva a situação</label><textarea id="descricao" rows={5} maxLength={MAX_DESCRICAO} placeholder="Ex.: O cano estourou há três dias e a água corre pela calçada…" aria-invalid={!!errors.descricao} {...register("descricao", { validate: v => { const n = (v ?? "").trim().length; if (!n) return "Conte o que está acontecendo."; if (n < MIN_DESCRICAO) return "Escreva pelo menos 10 caracteres."; return true; } })}/><div className="campo__rodape">{errors.descricao ? <small className="erro">{errors.descricao.message}</small> : <span/>}<small className="dica">{descricao.length}/{MAX_DESCRICAO}</small></div></div>
         <fieldset className="gravidade"><legend>Qual a urgência?</legend><div className="gravidade__lista">{GRAVIDADES.map(g => <label key={g.value} className="gravidade__cartao"><input type="radio" value={g.value} {...register("gravidade", { required: true })}/><span className="gravidade__corpo"><span className={`barras nivel-${g.nivel}`} aria-hidden="true"><i/><i/><i/></span><strong>{g.titulo}</strong><small>{g.desc}</small></span></label>)}</div></fieldset><p className="nota-envio">Ao enviar, o relato será registrado para análise da equipe.</p>
       </section>

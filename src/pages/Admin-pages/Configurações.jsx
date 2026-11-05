@@ -21,7 +21,13 @@ import {
 import Header from "../../components/Header";
 import Sidebar from "../../components/Sidebar";
 import { useTema } from "../../context/TemaContext";
-import { API_URL } from "../../api";
+import {
+  buscarPerfil,
+  atualizarPerfil,
+  alterarSenha,
+  buscarPreferencias,
+  salvarPreferencias as salvarPreferenciasBD
+} from "../../dados";
 
 import "./AdminPaginas.css";
 import "./Configuracoes.css";
@@ -61,6 +67,7 @@ function Configuracoes() {
   const [tipoMensagem, setTipoMensagem] = useState("sucesso");
   const [carregandoPerfil, setCarregandoPerfil] = useState(true);
   const [salvando, setSalvando] = useState(false);
+  const [senhas, setSenhas] = useState({ atual: "", nova: "", confirmar: "" });
 
   function mostrarMensagem(texto, tipo = "sucesso") {
     setMensagem(texto);
@@ -73,81 +80,41 @@ function Configuracoes() {
     async function carregarDados() {
       if (!idUsuario) {
         setCarregandoPerfil(false);
-        mostrarMensagem(
-          "Faça login novamente para carregar seu perfil.",
-          "erro"
-        );
+        mostrarMensagem("Faça login novamente para carregar seu perfil.", "erro");
         return;
       }
 
       setCarregandoPerfil(true);
 
       try {
-        const resposta = await fetch(
-          `${API_URL}/usuarios/${encodeURIComponent(idUsuario)}`
-        );
-
-        const dados = await resposta.json().catch(() => ({}));
-
-        if (!resposta.ok) {
-          throw new Error(
-            dados.erro || "Não foi possível carregar o perfil."
-          );
-        }
-
+        const dados = await buscarPerfil();
         if (cancelado) return;
 
         setPerfil({
           nome: dados.nome || "",
           email: dados.email || "",
-          cargo: dados.cargo || "Cidadão",
+          cargo: dados.cargo || "Funcionário",
         });
 
-        const usuarioAtualizado = {
-          ...usuarioLogado,
-          ...dados,
-        };
-
+        const usuarioAtualizado = { ...usuarioLogado, ...dados };
         setUsuarioLogado(usuarioAtualizado);
-        localStorage.setItem(
-          "usuario",
-          JSON.stringify(usuarioAtualizado)
-        );
+        localStorage.setItem("usuario", JSON.stringify(usuarioAtualizado));
 
         try {
-          const respostaPreferencias = await fetch(
-            `${API_URL}/usuarios/${encodeURIComponent(idUsuario)}/preferencias`
-          );
-
-          if (respostaPreferencias.ok) {
-            const preferenciasBanco =
-              await respostaPreferencias.json();
-
-            if (!cancelado) {
-              setPreferencias({
-                notificacoes: Boolean(
-                  preferenciasBanco.notificacoes
-                ),
-                alertasUrgentes: Boolean(
-                  preferenciasBanco.alertasUrgentes
-                ),
-              });
-            }
+          const preferenciasBanco = await buscarPreferencias();
+          if (!cancelado) {
+            setPreferencias({
+              notificacoes: Boolean(preferenciasBanco.notificacoes),
+              alertasUrgentes: Boolean(preferenciasBanco.alertasUrgentes),
+            });
           }
         } catch (erro) {
-          console.error(
-            "Erro ao carregar preferências:",
-            erro
-          );
+          console.error("Erro ao carregar preferências:", erro);
         }
       } catch (erro) {
         console.error("Erro ao carregar perfil:", erro);
-
         if (!cancelado) {
-          mostrarMensagem(
-            erro.message || "Erro ao carregar os dados.",
-            "erro"
-          );
+          mostrarMensagem(erro.message || "Erro ao carregar os dados.", "erro");
         }
       } finally {
         if (!cancelado) {
@@ -186,22 +153,11 @@ function Configuracoes() {
   async function salvarDados(evento) {
     evento.preventDefault();
 
-    if (!idUsuario) {
-      mostrarMensagem(
-        "Faça login novamente para salvar o perfil.",
-        "erro"
-      );
-      return;
-    }
-
     const nome = perfil.nome.trim();
     const email = perfil.email.trim();
 
     if (!nome || !email) {
-      mostrarMensagem(
-        "Preencha o nome e o e-mail.",
-        "erro"
-      );
+      mostrarMensagem("Preencha o nome e o e-mail.", "erro");
       return;
     }
 
@@ -209,59 +165,48 @@ function Configuracoes() {
     setMensagem("");
 
     try {
-      const resposta = await fetch(
-        `${API_URL}/usuarios/${encodeURIComponent(idUsuario)}`,
-        {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ nome, email }),
-        }
-      );
+      const { usuario: atualizado } = await atualizarPerfil({ nome, email });
 
-      const dados = await resposta.json().catch(() => ({}));
-
-      if (!resposta.ok) {
-        throw new Error(
-          dados.erro || "Não foi possível salvar o perfil."
-        );
-      }
-
-      if (!dados.usuario) {
-        throw new Error(
-          "O servidor não retornou o perfil atualizado."
-        );
-      }
-
-      const usuarioAtualizado = {
-        ...usuarioLogado,
-        ...dados.usuario,
-      };
-
+      const usuarioAtualizado = { ...usuarioLogado, ...atualizado };
       setUsuarioLogado(usuarioAtualizado);
-
       setPerfil({
-        nome: usuarioAtualizado.nome || "",
-        email: usuarioAtualizado.email || "",
-        cargo: usuarioAtualizado.cargo || "Cidadão",
+        nome: atualizado.nome || "",
+        email: atualizado.email || "",
+        cargo: atualizado.cargo || "Funcionário",
       });
-
-      localStorage.setItem(
-        "usuario",
-        JSON.stringify(usuarioAtualizado)
-      );
-
-      mostrarMensagem(
-        "Perfil atualizado no banco de dados!"
-      );
+      localStorage.setItem("usuario", JSON.stringify(usuarioAtualizado));
+      mostrarMensagem("Perfil atualizado com sucesso!");
     } catch (erro) {
       console.error("Erro ao salvar perfil:", erro);
+      mostrarMensagem(erro.message || "Erro ao salvar o perfil.", "erro");
+    } finally {
+      setSalvando(false);
+    }
+  }
 
-      mostrarMensagem(
-        erro.message || "Erro ao salvar o perfil.",
-        "erro"
-      );
+  // ---- trocar senha
+  async function trocarSenha(evento) {
+    evento.preventDefault();
+
+    if (senhas.nova.length < 6) {
+      mostrarMensagem("A nova senha deve ter pelo menos 6 caracteres.", "erro");
+      return;
+    }
+
+    if (senhas.nova !== senhas.confirmar) {
+      mostrarMensagem("A confirmação não confere com a nova senha.", "erro");
+      return;
+    }
+
+    setSalvando(true);
+    setMensagem("");
+
+    try {
+      await alterarSenha(senhas.atual, senhas.nova);
+      setSenhas({ atual: "", nova: "", confirmar: "" });
+      mostrarMensagem("Senha alterada com sucesso!");
+    } catch (erro) {
+      mostrarMensagem(erro.message || "Não foi possível alterar a senha.", "erro");
     } finally {
       setSalvando(false);
     }
@@ -270,47 +215,15 @@ function Configuracoes() {
   async function salvarPreferencias(evento) {
     evento.preventDefault();
 
-    if (!idUsuario) {
-      mostrarMensagem(
-        "Faça login novamente para salvar as preferências.",
-        "erro"
-      );
-      return;
-    }
-
     setSalvando(true);
     setMensagem("");
 
     try {
-      const resposta = await fetch(
-        `${API_URL}/usuarios/${encodeURIComponent(idUsuario)}/preferencias`,
-        {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(preferencias),
-        }
-      );
-
-      const dados = await resposta.json().catch(() => ({}));
-
-      if (!resposta.ok) {
-        throw new Error(
-          dados.erro || "Não foi possível salvar as preferências."
-        );
-      }
-
-      mostrarMensagem(
-        "Preferências salvas no banco de dados!"
-      );
+      await salvarPreferenciasBD(preferencias);
+      mostrarMensagem("Preferências salvas com sucesso!");
     } catch (erro) {
       console.error("Erro ao salvar preferências:", erro);
-
-      mostrarMensagem(
-        erro.message || "Erro ao salvar as preferências.",
-        "erro"
-      );
+      mostrarMensagem(erro.message || "Erro ao salvar as preferências.", "erro");
     } finally {
       setSalvando(false);
     }
@@ -381,24 +294,11 @@ function Configuracoes() {
                 <div className="perfil-avatar grande">
                   <FaUserCircle />
                 </div>
-
                 <div>
-                  <strong>Foto do perfil</strong>
-                  <p>
-                    O envio de foto será implementado em uma
-                    próxima etapa.
-                  </p>
-
-                  <button
-                    type="button"
-                    className="perfil-secondary-button"
-                    disabled
-                  >
-                    <FaCamera /> Adicionar foto
-                  </button>
+                  <strong>{perfil.nome || "Sem nome"}</strong>
+                  <p>{perfil.email}</p>
                 </div>
               </div>
-
               <label className="perfil-field">
                 <span>Nome completo</span>
 
@@ -469,52 +369,62 @@ function Configuracoes() {
           <section className="perfil-detail-card">
             {renderCabecalhoSecao(
               "Segurança",
-              "Proteja sua conta administrativa."
+              "Altere a senha da sua conta."
             )}
-
-            <div className="perfil-info-banner">
-              <FaShieldAlt />
-              <div>
-                <strong>Proteção da conta</strong>
-                <p>
-                  A alteração de senha e a gestão das sessões
-                  precisam de autenticação segura no servidor.
-                </p>
+            <form onSubmit={trocarSenha}>
+              <label className="perfil-field">
+                <span>Senha atual</span>
+                <div className="perfil-input">
+                  <FaLock />
+                  <input
+                    type="password"
+                    value={senhas.atual}
+                    onChange={(e) => setSenhas((a) => ({ ...a, atual: e.target.value }))}
+                    autoComplete="current-password"
+                    required
+                    disabled={salvando}
+                  />
+                </div>
+              </label>
+              <label className="perfil-field">
+                <span>Nova senha</span>
+                <div className="perfil-input">
+                  <FaLock />
+                  <input
+                    type="password"
+                    value={senhas.nova}
+                    onChange={(e) => setSenhas((a) => ({ ...a, nova: e.target.value }))}
+                    autoComplete="new-password"
+                    minLength={6}
+                    required
+                    disabled={salvando}
+                  />
+                </div>
+              </label>
+              <label className="perfil-field">
+                <span>Confirmar nova senha</span>
+                <div className="perfil-input">
+                  <FaLock />
+                  <input
+                    type="password"
+                    value={senhas.confirmar}
+                    onChange={(e) => setSenhas((a) => ({ ...a, confirmar: e.target.value }))}
+                    autoComplete="new-password"
+                    minLength={6}
+                    required
+                    disabled={salvando}
+                  />
+                </div>
+              </label>
+              <div className="perfil-form-actions">
+                <button type="submit" disabled={salvando}>
+                  <FaSave />
+                  {salvando ? "Salvando..." : "Alterar senha"}
+                </button>
               </div>
-            </div>
-
-            <div className="perfil-action-row">
-              <div className="perfil-action-icon">
-                <FaLock />
-              </div>
-
-              <div className="perfil-action-copy">
-                <strong>Alterar senha</strong>
-                <p>
-                  Esse recurso ainda não está conectado ao backend.
-                </p>
-              </div>
-
-              <span className="perfil-coming-soon">Em breve</span>
-            </div>
-
-            <div className="perfil-action-row">
-              <div className="perfil-action-icon">
-                <FaSignOutAlt />
-              </div>
-
-              <div className="perfil-action-copy">
-                <strong>Sessões ativas</strong>
-                <p>
-                  O controle de sessões será conectado ao login.
-                </p>
-              </div>
-
-              <span className="perfil-coming-soon">Em breve</span>
-            </div>
+            </form>
           </section>
         );
-
       case "preferencias":
         return (
           <section className="perfil-detail-card">

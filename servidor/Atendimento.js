@@ -24,6 +24,20 @@ export async function listarAtendimentos(idOcorrencia) {
 
 export async function criarAtendimento(dados) {
 
+    const [equipe] = await db.execute(
+        "SELECT nome FROM equipes WHERE id_equipe = ?",
+        [dados.id_equipe]
+    );
+
+    if (!equipe.length) {
+        throw new Error("EQUIPE_INEXISTENTE");
+    }
+
+    await db.execute(
+        "UPDATE ocorrencias SET responsavel = ? WHERE id_ocorrencia = ?",
+        [equipe[0].nome, dados.id_ocorrencia]
+    );
+
     const [resultado] = await db.execute(
         `INSERT INTO atendimentos
         (

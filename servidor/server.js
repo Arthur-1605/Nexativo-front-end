@@ -19,13 +19,20 @@ import {
     listarUsuarios,
     buscarUsuarioPorId,
     atualizarUsuario,
-    alterarStatusUsuario
+    alterarStatusUsuario,
+    atualizarPerfilProprio,
+    alterarSenhaProprio,
+    obterPreferencias
 } from "./UsuarioBD.js";
 
 import {
     listarCategorias,
     buscarCategoriaPorId,
-    criarCategoria
+    buscarCategoriaPorNome,
+    criarCategoria,
+    atualizarCategoria,
+    contarOcorrenciasDaCategoria,
+    excluirCategoria
 } from "./Categoria.js";
 
 import {
@@ -56,13 +63,25 @@ import {
 import {
     listarNotificacoes,
     criarNotificacao,
-    marcarComoLida
+    marcarComoLida,
+    marcarTodasComoLidas
 } from "./Notificacoes.js";
 
 import {
     listarAnexos,
     criarAnexo
 } from "./Anexos.js";
+
+import {
+    listarObservacoes,
+    criarObservacao,
+    listarTarefas,
+    criarTarefa,
+    atualizarTarefa,
+    excluirTarefa
+} from "./Acompanhamento.js";
+
+import { obterEstatisticas } from "./Estatisticas.js";
 
 dotenv.config();
 
@@ -78,50 +97,94 @@ const ai = new GoogleGenAI({
     apiKey: process.env.GEMINI_API_KEY
 });
 
+const MODELO_IA = "gemini-2.5-flash";
+
 console.log(
     process.env.GEMINI_API_KEY
         ? "CHAVE DO GEMINI ENCONTRADA"
         : "CHAVE DO GEMINI NÃO ENCONTRADA"
 );
 
+if (!process.env.JWT_SECRET) {
+    console.warn("ATENÇÃO: JWT_SECRET não definido no .env; o login falhará.");
+}
+
+// Valores aceitos pelo sistema (devem bater com o front-end)
+const STATUS_OCORRENCIA = ["Aberta", "Em análise", "Em atendimento", "Resolvida"];
+const PRIORIDADES = ["Alta", "Média", "Baixa"];
+const STATUS_CATEGORIA = ["Ativa", "Inativa"];
+
 // ======================================================
-// MIDDLEWARE: VALIDAR ADMINISTRADOR
+// MIDDLEWARES DE AUTENTICAÇÃO
 // ======================================================
+
+// Carrega o usuário informado no header x-usuario-id, se estiver ativo
+async function carregarUsuarioAtivo(req) {
+    const idUsuario = Number(req.headers["x-usuario-id"]);
+
+    if (!Number.isInteger(idUsuario) || idUsuario <= 0) {
+        return null;
+    }
+
+    const [usuarios] = await db.execute(
+        `SELECT id_usuario, nome, email, cargo, perfil, status
+         FROM usuarios
+         WHERE id_usuario = ?
+         LIMIT 1`,
+        [idUsuario]
+    );
+
+    const usuario = usuarios[0];
+
+    if (!usuario || usuario.status !== "Ativo") {
+        return null;
+    }
+
+    return usuario;
+}
+
+function ehAdministrador(usuario) {
+    return usuario.perfil === "Administrador" || usuario.cargo === "Administrador";
+}
+
+async function exigirUsuarioAtivo(req, res, next) {
+    try {
+        const usuario = await carregarUsuarioAtivo(req);
+
+        if (!usuario) {
+            return res.status(401).json({
+                erro: "Faça login para continuar."
+            });
+        }
+
+        req.usuarioAtual = usuario;
+        return next();
+    } catch (erro) {
+        console.error("Erro ao validar usuário:", erro);
+        return res.status(500).json({
+            erro: "Não foi possível validar sua sessão."
+        });
+    }
+}
 
 async function exigirAdministrador(req, res, next) {
     try {
-        const idUsuario = Number(req.headers["x-usuario-id"]);
+        const usuario = await carregarUsuarioAtivo(req);
 
-        if (!Number.isInteger(idUsuario) || idUsuario <= 0) {
+        if (!usuario) {
             return res.status(401).json({
                 erro: "Faça login como administrador."
             });
         }
 
-        const [usuarios] = await db.execute(
-            `SELECT id_usuario, cargo, perfil, status
-             FROM usuarios
-             WHERE id_usuario = ?
-             LIMIT 1`,
-            [idUsuario]
-        );
-
-        const usuario = usuarios[0];
-
-        if (
-            !usuario ||
-            usuario.status !== "Ativo" ||
-            (
-                usuario.perfil !== "Administrador" &&
-                usuario.cargo !== "Administrador"
-            )
-        ) {
+        if (!ehAdministrador(usuario)) {
             return res.status(403).json({
                 erro: "Apenas administradores ativos podem realizar esta ação."
             });
         }
 
         req.administrador = usuario;
+        req.usuarioAtual = usuario;
         return next();
     } catch (erro) {
         console.error("Erro ao validar administrador:", erro);
@@ -132,8 +195,16 @@ async function exigirAdministrador(req, res, next) {
     }
 }
 
+// Permite acesso ao próprio usuário ou a um administrador
+function podeAcessarUsuario(req, idAlvo) {
+    return (
+        ehAdministrador(req.usuarioAtual) ||
+        req.usuarioAtual.id_usuario === idAlvo
+    );
+}
+
 // ======================================================
-// SERVIDOR HTTP E SOCKET.IO
+// SERVIDOR HTTP E SOCKET.IO (CHAT)
 // ======================================================
 
 const servidorHttp = createServer(app);
@@ -306,6 +377,38 @@ io.on("connection", (socket) => {
 });
 
 // ======================================================
+// INTELIGÊNCIA ARTIFICIAL
+// ======================================================
+
+// Gera a análise da denúncia e grava em observacao_ia (não bloqueia o cadastro)
+async function analisarOcorrenciaIA(idOcorrencia) {
+    if (!process.env.GEMINI_API_KEY) return;
+
+    const ocorrencia = await buscarOcorrenciaPorId(idOcorrencia);
+    if (!ocorrencia) return;
+
+    const resposta = await ai.models.generateContent({
+        model: MODELO_IA,
+        contents:
+            "Você apoia a gestão de uma prefeitura. Analise a denúncia abaixo " +
+            "em no máximo 3 frases curtas, em português: informe o risco à população, " +
+            "o impacto provável e a prioridade sugerida (Alta, Média ou Baixa).\n\n" +
+            `Categoria: ${ocorrencia.categoria_nome}\n` +
+            `Título: ${ocorrencia.titulo}\n` +
+            `Descrição: ${ocorrencia.descricao}\n` +
+            `Local: ${ocorrencia.endereco || ""}, ${ocorrencia.bairro || ""}, ${ocorrencia.cidade || ""}`
+    });
+
+    const texto = (resposta.text || "").trim();
+
+    if (texto) {
+        await atualizarOcorrencia(idOcorrencia, {
+            observacao_ia: texto.slice(0, 2000)
+        });
+    }
+}
+
+// ======================================================
 // ROTA INICIAL
 // ======================================================
 
@@ -315,83 +418,11 @@ app.get("/", (req, res) => {
     });
 });
 
-// As rotas de usuários continuam a partir daqui.
-app.get("/categorias", async (req, res) => {
-    try {
-        const categorias = await listarCategorias();
-        return res.json(categorias);
-    } catch (erro) {
-        console.error("Erro ao listar categorias:", erro);
-        return res.status(500).json({
-            erro: "Erro ao buscar categorias."
-        });
-    }
-});
-
-app.get("/categorias/:id", async (req, res) => {
-    const id = Number(req.params.id);
-
-    if (!Number.isInteger(id) || id <= 0) {
-        return res.status(400).json({
-            erro: "ID de categoria inválido."
-        });
-    }
-
-    try {
-        const categoria = await buscarCategoriaPorId(id);
-
-        if (!categoria) {
-            return res.status(404).json({
-                erro: "Categoria não encontrada."
-            });
-        }
-
-        return res.json(categoria);
-    } catch (erro) {
-        console.error("Erro ao buscar categoria:", erro);
-        return res.status(500).json({
-            erro: "Erro ao buscar categoria."
-        });
-    }
-});
-
-app.post(
-    "/categorias",
-    exigirAdministrador,
-    async (req, res) => {
-        try {
-            const { nome, descricao } = req.body || {};
-
-            if (typeof nome !== "string" || !nome.trim()) {
-                return res.status(400).json({
-                    erro: "Informe o nome da categoria."
-                });
-            }
-
-            const categoria = await criarCategoria({
-                nome: nome.trim(),
-                descricao: String(descricao || "").trim()
-            });
-
-            return res.status(201).json({
-                mensagem: "Categoria criada com sucesso.",
-                categoria
-            });
-        } catch (erro) {
-            console.error("Erro ao criar categoria:", erro);
-            return res.status(500).json({
-                erro: "Erro ao criar categoria."
-            });
-        }
-    }
-);
-
 // ======================================================
-// USUÁRIOS
+// LOGIN E CADASTRO
 // ======================================================
 
 // Cadastro público: cria somente contas comuns.
-// O gerenciamento de usuários continua protegido em POST /usuario.
 app.post("/cadastro", async (req, res) => {
     try {
         const { nome, email, senha } = req.body || {};
@@ -440,228 +471,6 @@ app.post("/cadastro", async (req, res) => {
     }
 });
 
-app.post("/usuario", exigirAdministrador, async (req, res) => {
-    try {
-        const {
-            nome,
-            email,
-            senha,
-            cargo,
-            setor,
-            perfil
-        } = req.body || {};
-
-        if (
-            typeof nome !== "string" ||
-            !nome.trim() ||
-            typeof email !== "string" ||
-            !email.trim() ||
-            typeof senha !== "string" ||
-            senha.length < 6 ||
-            typeof cargo !== "string" ||
-            !cargo.trim() ||
-            typeof setor !== "string" ||
-            !setor.trim() ||
-            !["Usuário", "Administrador"].includes(perfil)
-        ) {
-            return res.status(400).json({
-                erro: "Preencha os campos corretamente. A senha deve ter pelo menos 6 caracteres."
-            });
-        }
-
-        const usuario = await criarUsuario({
-            nome: nome.trim(),
-            email: email.trim(),
-            senha,
-            cargo: cargo.trim(),
-            setor: setor.trim(),
-            perfil
-        });
-
-        return res.status(201).json({
-            mensagem: "Usuário cadastrado com sucesso.",
-            usuario
-        });
-    } catch (erro) {
-        if (
-            erro.message === "EMAIL_JA_CADASTRADO" ||
-            erro.code === "ER_DUP_ENTRY"
-        ) {
-            return res.status(409).json({
-                erro: "Este e-mail já está cadastrado."
-            });
-        }
-
-        console.error("Erro ao cadastrar usuário:", erro);
-
-        return res.status(500).json({
-            erro: "Erro ao cadastrar usuário."
-        });
-    }
-});
-
-app.get("/usuarios", exigirAdministrador, async (req, res) => {
-    try {
-        const usuarios = await listarUsuarios();
-        return res.json(usuarios);
-    } catch (erro) {
-        console.error("Erro ao listar usuários:", erro);
-
-        return res.status(500).json({
-            erro: "Erro ao buscar usuários."
-        });
-    }
-});
-
-app.get("/usuarios/:id", async (req, res) => {
-    const id = Number(req.params.id);
-
-    if (!Number.isInteger(id) || id <= 0) {
-        return res.status(400).json({
-            erro: "ID de usuário inválido."
-        });
-    }
-
-    try {
-        const usuario = await buscarUsuarioPorId(id);
-
-        if (!usuario) {
-            return res.status(404).json({
-                erro: "Usuário não encontrado."
-            });
-        }
-
-        return res.json(usuario);
-    } catch (erro) {
-        console.error("Erro ao buscar usuário:", erro);
-
-        return res.status(500).json({
-            erro: "Erro ao buscar usuário."
-        });
-    }
-});
-
-app.put("/usuarios/:id", exigirAdministrador, async (req, res) => {
-    const id = Number(req.params.id);
-
-    const {
-        nome,
-        email,
-        cargo,
-        setor,
-        perfil
-    } = req.body || {};
-
-    if (
-        !Number.isInteger(id) ||
-        id <= 0 ||
-        typeof nome !== "string" ||
-        !nome.trim() ||
-        typeof email !== "string" ||
-        !email.trim() ||
-        typeof cargo !== "string" ||
-        !cargo.trim() ||
-        typeof setor !== "string" ||
-        !setor.trim() ||
-        !["Usuário", "Administrador"].includes(perfil)
-    ) {
-        return res.status(400).json({
-            erro: "Preencha todos os campos corretamente."
-        });
-    }
-
-    if (
-        id === req.administrador.id_usuario &&
-        perfil !== "Administrador"
-    ) {
-        return res.status(400).json({
-            erro: "Você não pode remover seu próprio perfil de administrador."
-        });
-    }
-
-    try {
-        const usuario = await atualizarUsuario(id, {
-            nome: nome.trim(),
-            email: email.trim(),
-            cargo: cargo.trim(),
-            setor: setor.trim(),
-            perfil
-        });
-
-        if (!usuario) {
-            return res.status(404).json({
-                erro: "Usuário não encontrado."
-            });
-        }
-
-        return res.json({
-            mensagem: "Usuário atualizado com sucesso.",
-            usuario
-        });
-    } catch (erro) {
-        if (erro.code === "ER_DUP_ENTRY") {
-            return res.status(409).json({
-                erro: "Este e-mail já está cadastrado."
-            });
-        }
-
-        console.error("Erro ao atualizar usuário:", erro);
-
-        return res.status(500).json({
-            erro: "Erro ao atualizar usuário."
-        });
-    }
-});
-
-app.patch(
-    "/usuarios/:id/status",
-    exigirAdministrador,
-    async (req, res) => {
-        const id = Number(req.params.id);
-        const { status } = req.body || {};
-
-        if (
-            !Number.isInteger(id) ||
-            id <= 0 ||
-            !["Ativo", "Inativo"].includes(status)
-        ) {
-            return res.status(400).json({
-                erro: "ID ou status inválido."
-            });
-        }
-
-        if (
-            id === req.administrador.id_usuario &&
-            status === "Inativo"
-        ) {
-            return res.status(400).json({
-                erro: "Você não pode desativar sua própria conta."
-            });
-        }
-
-        try {
-            const usuario = await alterarStatusUsuario(id, status);
-
-            if (!usuario) {
-                return res.status(404).json({
-                    erro: "Usuário não encontrado."
-                });
-            }
-
-            return res.json({
-                mensagem: `Usuário ${status.toLowerCase()} com sucesso.`,
-                usuario
-            });
-        } catch (erro) {
-            console.error("Erro ao alterar status:", erro);
-
-            return res.status(500).json({
-                erro: "Erro ao alterar status do usuário."
-            });
-        }
-    }
-);
-
 app.post("/login", async (req, res) => {
     try {
         const { email, senha } = req.body || {};
@@ -706,174 +515,787 @@ app.post("/login", async (req, res) => {
 });
 
 // ======================================================
+// PERFIL DO PRÓPRIO USUÁRIO
+// ======================================================
+
+app.get("/perfil", exigirUsuarioAtivo, (req, res) => {
+    return res.json(req.usuarioAtual);
+});
+
+app.put("/perfil", exigirUsuarioAtivo, async (req, res) => {
+    const { nome, email } = req.body || {};
+
+    if (
+        typeof nome !== "string" ||
+        !nome.trim() ||
+        typeof email !== "string" ||
+        !email.trim()
+    ) {
+        return res.status(400).json({
+            erro: "Preencha nome e e-mail."
+        });
+    }
+
+    try {
+        const usuario = await atualizarPerfilProprio(
+            req.usuarioAtual.id_usuario,
+            { nome: nome.trim(), email: email.trim() }
+        );
+
+        return res.json({
+            mensagem: "Perfil atualizado com sucesso.",
+            usuario
+        });
+    } catch (erro) {
+        if (erro.message === "EMAIL_JA_CADASTRADO" || erro.code === "ER_DUP_ENTRY") {
+            return res.status(409).json({
+                erro: "Este e-mail já está cadastrado."
+            });
+        }
+
+        console.error("Erro ao atualizar perfil:", erro);
+
+        return res.status(500).json({
+            erro: "Erro ao atualizar perfil."
+        });
+    }
+});
+
+app.put("/perfil/senha", exigirUsuarioAtivo, async (req, res) => {
+    const { senha_atual, nova_senha } = req.body || {};
+
+    if (
+        typeof senha_atual !== "string" ||
+        !senha_atual ||
+        typeof nova_senha !== "string" ||
+        nova_senha.length < 6
+    ) {
+        return res.status(400).json({
+            erro: "Informe a senha atual e uma nova senha com pelo menos 6 caracteres."
+        });
+    }
+
+    try {
+        await alterarSenhaProprio(
+            req.usuarioAtual.id_usuario,
+            senha_atual,
+            nova_senha
+        );
+
+        return res.json({
+            mensagem: "Senha alterada com sucesso."
+        });
+    } catch (erro) {
+        if (erro.message === "SENHA_ATUAL_INCORRETA") {
+            return res.status(400).json({
+                erro: "A senha atual está incorreta."
+            });
+        }
+
+        console.error("Erro ao alterar senha:", erro);
+
+        return res.status(500).json({
+            erro: "Erro ao alterar a senha."
+        });
+    }
+});
+
+// ======================================================
+// USUÁRIOS (gestão pelo administrador)
+// ======================================================
+
+app.get("/usuarios", exigirAdministrador, async (req, res) => {
+    try {
+        return res.json(await listarUsuarios());
+    } catch (erro) {
+        console.error("Erro ao listar usuários:", erro);
+        return res.status(500).json({ erro: "Erro ao buscar usuários." });
+    }
+});
+
+app.post("/usuario", exigirAdministrador, async (req, res) => {
+    try {
+        const { nome, email, senha, cargo, setor, perfil } = req.body || {};
+
+        if (
+            typeof nome !== "string" ||
+            !nome.trim() ||
+            typeof email !== "string" ||
+            !email.trim() ||
+            typeof senha !== "string" ||
+            senha.length < 6 ||
+            typeof cargo !== "string" ||
+            !cargo.trim() ||
+            typeof setor !== "string" ||
+            !setor.trim() ||
+            !["Usuário", "Administrador"].includes(perfil)
+        ) {
+            return res.status(400).json({
+                erro: "Preencha os campos corretamente. A senha deve ter pelo menos 6 caracteres."
+            });
+        }
+
+        const usuario = await criarUsuario({
+            nome: nome.trim(),
+            email: email.trim(),
+            senha,
+            cargo: cargo.trim(),
+            setor: setor.trim(),
+            perfil
+        });
+
+        return res.status(201).json({
+            mensagem: "Usuário cadastrado com sucesso.",
+            usuario
+        });
+    } catch (erro) {
+        if (erro.message === "EMAIL_JA_CADASTRADO" || erro.code === "ER_DUP_ENTRY") {
+            return res.status(409).json({ erro: "Este e-mail já está cadastrado." });
+        }
+
+        console.error("Erro ao cadastrar usuário:", erro);
+        return res.status(500).json({ erro: "Erro ao cadastrar usuário." });
+    }
+});
+
+app.get("/usuarios/:id", exigirUsuarioAtivo, async (req, res) => {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ erro: "ID de usuário inválido." });
+    }
+
+    if (!podeAcessarUsuario(req, id)) {
+        return res.status(403).json({ erro: "Você não pode consultar este usuário." });
+    }
+
+    try {
+        const usuario = await buscarUsuarioPorId(id);
+
+        if (!usuario) {
+            return res.status(404).json({ erro: "Usuário não encontrado." });
+        }
+
+        return res.json(usuario);
+    } catch (erro) {
+        console.error("Erro ao buscar usuário:", erro);
+        return res.status(500).json({ erro: "Erro ao buscar usuário." });
+    }
+});
+
+app.put("/usuarios/:id", exigirAdministrador, async (req, res) => {
+    const id = Number(req.params.id);
+    const { nome, email, cargo, setor, perfil } = req.body || {};
+
+    if (
+        !Number.isInteger(id) ||
+        id <= 0 ||
+        typeof nome !== "string" ||
+        !nome.trim() ||
+        typeof email !== "string" ||
+        !email.trim() ||
+        typeof cargo !== "string" ||
+        !cargo.trim() ||
+        typeof setor !== "string" ||
+        !setor.trim() ||
+        !["Usuário", "Administrador"].includes(perfil)
+    ) {
+        return res.status(400).json({ erro: "Preencha todos os campos corretamente." });
+    }
+
+    if (id === req.administrador.id_usuario && perfil !== "Administrador") {
+        return res.status(400).json({
+            erro: "Você não pode remover seu próprio perfil de administrador."
+        });
+    }
+
+    try {
+        const usuario = await atualizarUsuario(id, {
+            nome: nome.trim(),
+            email: email.trim(),
+            cargo: cargo.trim(),
+            setor: setor.trim(),
+            perfil
+        });
+
+        if (!usuario) {
+            return res.status(404).json({ erro: "Usuário não encontrado." });
+        }
+
+        return res.json({
+            mensagem: "Usuário atualizado com sucesso.",
+            usuario
+        });
+    } catch (erro) {
+        if (erro.code === "ER_DUP_ENTRY" || erro.message === "EMAIL_JA_CADASTRADO") {
+            return res.status(409).json({ erro: "Este e-mail já está cadastrado." });
+        }
+
+        console.error("Erro ao atualizar usuário:", erro);
+        return res.status(500).json({ erro: "Erro ao atualizar usuário." });
+    }
+});
+
+app.patch("/usuarios/:id/status", exigirAdministrador, async (req, res) => {
+    const id = Number(req.params.id);
+    const { status } = req.body || {};
+
+    if (!Number.isInteger(id) || id <= 0 || !["Ativo", "Inativo"].includes(status)) {
+        return res.status(400).json({ erro: "ID ou status inválido." });
+    }
+
+    if (id === req.administrador.id_usuario && status === "Inativo") {
+        return res.status(400).json({ erro: "Você não pode desativar sua própria conta." });
+    }
+
+    try {
+        const usuario = await alterarStatusUsuario(id, status);
+
+        if (!usuario) {
+            return res.status(404).json({ erro: "Usuário não encontrado." });
+        }
+
+        return res.json({
+            mensagem: `Usuário ${status.toLowerCase()} com sucesso.`,
+            usuario
+        });
+    } catch (erro) {
+        console.error("Erro ao alterar status:", erro);
+        return res.status(500).json({ erro: "Erro ao alterar status do usuário." });
+    }
+});
+
+// ======================================================
+// PREFERÊNCIAS DO USUÁRIO
+// ======================================================
+
+app.get("/usuarios/:id/preferencias", exigirUsuarioAtivo, async (req, res) => {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ erro: "ID inválido." });
+    }
+
+    if (!podeAcessarUsuario(req, id)) {
+        return res.status(403).json({ erro: "Acesso negado." });
+    }
+
+    try {
+        return res.json(await obterPreferencias(id));
+    } catch (erro) {
+        console.error("Erro ao buscar preferências:", erro);
+        return res.status(500).json({ erro: "Erro ao buscar preferências." });
+    }
+});
+
+app.put("/usuarios/:id/preferencias", exigirUsuarioAtivo, async (req, res) => {
+    const id = Number(req.params.id);
+    const { notificacoes, alertasUrgentes } = req.body || {};
+
+    if (
+        !Number.isInteger(id) ||
+        id <= 0 ||
+        typeof notificacoes !== "boolean" ||
+        typeof alertasUrgentes !== "boolean"
+    ) {
+        return res.status(400).json({ erro: "Dados inválidos." });
+    }
+
+    if (!podeAcessarUsuario(req, id)) {
+        return res.status(403).json({ erro: "Acesso negado." });
+    }
+
+    try {
+        await db.execute(
+            `INSERT INTO preferencias_usuarios
+                (id_usuario, notificacoes, alertas_urgentes)
+             VALUES (?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+                notificacoes = VALUES(notificacoes),
+                alertas_urgentes = VALUES(alertas_urgentes)`,
+            [id, Number(notificacoes), Number(alertasUrgentes)]
+        );
+
+        return res.json({ mensagem: "Preferências salvas com sucesso." });
+    } catch (erro) {
+        console.error("Erro ao salvar preferências:", erro);
+        return res.status(500).json({ erro: "Erro ao salvar preferências." });
+    }
+});
+
+// ======================================================
 // CATEGORIAS
 // ======================================================
 
+// Pública: o formulário de denúncia precisa listar as categorias ativas
 app.get("/categorias", async (req, res) => {
     try {
         return res.json(await listarCategorias());
     } catch (erro) {
         console.error("Erro ao buscar categorias:", erro);
-        return res.status(500).json({
-            erro: "Erro ao buscar categorias."
-        });
+        return res.status(500).json({ erro: "Erro ao buscar categorias." });
     }
 });
 
-app.get("/categorias/:id", async (req, res) => {
+app.get("/categorias/:id", exigirAdministrador, async (req, res) => {
     try {
-        const categoria = await buscarCategoriaPorId(
-            Number(req.params.id)
-        );
+        const categoria = await buscarCategoriaPorId(Number(req.params.id));
 
         if (!categoria) {
-            return res.status(404).json({
-                erro: "Categoria não encontrada."
-            });
+            return res.status(404).json({ erro: "Categoria não encontrada." });
         }
 
         return res.json(categoria);
     } catch (erro) {
         console.error("Erro ao buscar categoria:", erro);
-        return res.status(500).json({
-            erro: "Erro ao buscar categoria."
-        });
+        return res.status(500).json({ erro: "Erro ao buscar categoria." });
     }
 });
 
-app.post("/categorias", async (req, res) => {
-    try {
-        const { nome, descricao } = req.body || {};
+function validarCategoria(corpo) {
+    const { nome, descricao, icone, status } = corpo || {};
 
-        if (typeof nome !== "string" || !nome.trim()) {
-            return res.status(400).json({
-                erro: "Informe o nome da categoria."
+    if (typeof nome !== "string" || !nome.trim() || nome.trim().length > 100) {
+        return { erro: "Informe o nome da categoria (até 100 caracteres)." };
+    }
+
+    if (status !== undefined && !STATUS_CATEGORIA.includes(status)) {
+        return { erro: "Status de categoria inválido." };
+    }
+
+    return {
+        dados: {
+            nome: nome.trim(),
+            descricao: String(descricao || "").trim(),
+            icone: String(icone || "📍").trim().slice(0, 16) || "📍",
+            status: status || "Ativa"
+        }
+    };
+}
+
+app.post("/categorias", exigirAdministrador, async (req, res) => {
+    const { erro, dados } = validarCategoria(req.body);
+
+    if (erro) {
+        return res.status(400).json({ erro });
+    }
+
+    try {
+        const categoria = await criarCategoria(dados);
+
+        return res.status(201).json({
+            mensagem: "Categoria criada com sucesso.",
+            categoria
+        });
+    } catch (erroBanco) {
+        console.error("Erro ao criar categoria:", erroBanco);
+        return res.status(500).json({ erro: "Erro ao criar categoria." });
+    }
+});
+
+app.put("/categorias/:id", exigirAdministrador, async (req, res) => {
+    const id = Number(req.params.id);
+    const { erro, dados } = validarCategoria(req.body);
+
+    if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ erro: "ID de categoria inválido." });
+    }
+
+    if (erro) {
+        return res.status(400).json({ erro });
+    }
+
+    try {
+        if (!(await buscarCategoriaPorId(id))) {
+            return res.status(404).json({ erro: "Categoria não encontrada." });
+        }
+
+        const categoria = await atualizarCategoria(id, dados);
+
+        return res.json({
+            mensagem: "Categoria atualizada com sucesso.",
+            categoria
+        });
+    } catch (erroBanco) {
+        console.error("Erro ao atualizar categoria:", erroBanco);
+        return res.status(500).json({ erro: "Erro ao atualizar categoria." });
+    }
+});
+
+app.delete("/categorias/:id", exigirAdministrador, async (req, res) => {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ erro: "ID de categoria inválido." });
+    }
+
+    try {
+        if (!(await buscarCategoriaPorId(id))) {
+            return res.status(404).json({ erro: "Categoria não encontrada." });
+        }
+
+        if ((await contarOcorrenciasDaCategoria(id)) > 0) {
+            return res.status(409).json({
+                erro: "Esta categoria possui ocorrências. Desative-a em vez de excluí-la."
             });
         }
 
-        const categoria = await criarCategoria(
-            nome.trim(),
-            descricao
-        );
+        await excluirCategoria(id);
 
-        return res.status(201).json(categoria);
-    } catch (erro) {
-        console.error("Erro ao criar categoria:", erro);
-        return res.status(500).json({
-            erro: "Erro ao criar categoria."
-        });
+        return res.json({ mensagem: "Categoria excluída." });
+    } catch (erroBanco) {
+        console.error("Erro ao excluir categoria:", erroBanco);
+        return res.status(500).json({ erro: "Erro ao excluir categoria." });
     }
 });
 
 // ======================================================
-// OCORRÊNCIAS
+// OCORRÊNCIAS (somente administradores)
 // ======================================================
 
-app.get("/ocorrencias", async (req, res) => {
+app.get("/ocorrencias", exigirAdministrador, async (req, res) => {
     try {
         return res.json(await listarOcorrencias());
     } catch (erro) {
         console.error("Erro ao buscar ocorrências:", erro);
-        return res.status(500).json({
-            erro: "Erro ao buscar ocorrências."
-        });
+        return res.status(500).json({ erro: "Erro ao buscar ocorrências." });
     }
 });
 
-app.get("/ocorrencias/:id", async (req, res) => {
+app.get("/ocorrencias/:id", exigirAdministrador, async (req, res) => {
     try {
-        const ocorrencia = await buscarOcorrenciaPorId(
-            Number(req.params.id)
-        );
+        const ocorrencia = await buscarOcorrenciaPorId(Number(req.params.id));
 
         if (!ocorrencia) {
-            return res.status(404).json({
-                erro: "Ocorrência não encontrada."
-            });
+            return res.status(404).json({ erro: "Ocorrência não encontrada." });
         }
 
         return res.json(ocorrencia);
     } catch (erro) {
         console.error("Erro ao buscar ocorrência:", erro);
-        return res.status(500).json({
-            erro: "Erro ao buscar ocorrência."
-        });
+        return res.status(500).json({ erro: "Erro ao buscar ocorrência." });
     }
 });
 
-app.post("/ocorrencias", async (req, res) => {
-    try {
-        const {
-            id_usuario,
-            id_categoria,
-            titulo,
-            descricao,
-            prioridade
-        } = req.body || {};
+// Cadastro feito pelo painel do administrador
+app.post("/ocorrencias", exigirAdministrador, async (req, res) => {
+    const {
+        id_categoria,
+        titulo,
+        descricao,
+        prioridade,
+        rua,
+        bairro,
+        cidade,
+        responsavel,
+        prazo
+    } = req.body || {};
 
-        if (
-            !id_usuario ||
-            !id_categoria ||
-            !titulo?.trim?.() ||
-            !descricao?.trim?.() ||
-            !prioridade
-        ) {
-            return res.status(400).json({
-                erro: "Preencha todos os campos obrigatórios."
-            });
+    if (
+        !Number.isInteger(Number(id_categoria)) ||
+        typeof titulo !== "string" || !titulo.trim() || titulo.trim().length > 100 ||
+        typeof descricao !== "string" || descricao.trim().length < 10 ||
+        !PRIORIDADES.includes(prioridade) ||
+        typeof rua !== "string" || !rua.trim() ||
+        typeof bairro !== "string" || !bairro.trim() ||
+        typeof cidade !== "string" || !cidade.trim()
+    ) {
+        return res.status(400).json({
+            erro: "Informe categoria, título, descrição (mínimo 10 caracteres), prioridade, rua, bairro e cidade."
+        });
+    }
+
+    if (prazo && !/^\d{4}-\d{2}-\d{2}$/.test(prazo)) {
+        return res.status(400).json({ erro: "Prazo inválido." });
+    }
+
+    try {
+        const categoria = await buscarCategoriaPorId(Number(id_categoria));
+
+        if (!categoria) {
+            return res.status(400).json({ erro: "A categoria informada não existe." });
         }
 
-        const resultado = await criarOcorrencia({
-            id_usuario,
-            id_categoria,
+        const { id_ocorrencia } = await criarOcorrencia({
+            id_usuario: req.administrador.id_usuario,
+            id_categoria: categoria.id_categoria,
             titulo: titulo.trim(),
             descricao: descricao.trim(),
-            prioridade
+            prioridade,
+            responsavel: responsavel?.trim() || null,
+            prazo: prazo || null
+        });
+
+        await criarLocalizacao({
+            id_ocorrencia,
+            endereco: rua.trim(),
+            bairro: bairro.trim(),
+            cidade: cidade.trim()
+        });
+
+        await criarHistorico({
+            id_ocorrencia,
+            id_usuario: req.administrador.id_usuario,
+            status_anterior: null,
+            novo_status: "Aberta",
+            observacao: "Ocorrência cadastrada no painel."
         });
 
         return res.status(201).json({
-            mensagem: "Ocorrência criada com sucesso!",
-            ...resultado
+            mensagem: "Ocorrência criada com sucesso.",
+            id_ocorrencia
         });
     } catch (erro) {
         console.error("Erro ao criar ocorrência:", erro);
-        return res.status(500).json({
-            erro: "Erro ao criar ocorrência."
-        });
+        return res.status(500).json({ erro: "Erro ao criar ocorrência." });
     }
 });
 
-app.put("/ocorrencias/:id", async (req, res) => {
+app.put("/ocorrencias/:id", exigirAdministrador, async (req, res) => {
+    const id = Number(req.params.id);
+    const corpo = req.body || {};
+
+    if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ erro: "ID de ocorrência inválido." });
+    }
+
+    if (corpo.status !== undefined && !STATUS_OCORRENCIA.includes(corpo.status)) {
+        return res.status(400).json({ erro: "Status inválido." });
+    }
+
+    if (corpo.prioridade !== undefined && !PRIORIDADES.includes(corpo.prioridade)) {
+        return res.status(400).json({ erro: "Prioridade inválida." });
+    }
+
+    if (corpo.prazo && !/^\d{4}-\d{2}-\d{2}$/.test(corpo.prazo)) {
+        return res.status(400).json({ erro: "Prazo inválido." });
+    }
+
+    if (corpo.titulo !== undefined && (typeof corpo.titulo !== "string" || !corpo.titulo.trim() || corpo.titulo.trim().length > 100)) {
+        return res.status(400).json({ erro: "Título inválido." });
+    }
+
+    for (const campo of ["orcamento_estimado", "orcamento_aprovado", "orcamento_gasto"]) {
+        if (corpo[campo] !== undefined) {
+            const valor = Number(corpo[campo]);
+            if (!Number.isFinite(valor) || valor < 0) {
+                return res.status(400).json({ erro: `Valor inválido em ${campo}.` });
+            }
+            corpo[campo] = valor;
+        }
+    }
+
     try {
-        const resultado = await atualizarOcorrencia(
-            Number(req.params.id),
-            req.body
-        );
+        const atual = await buscarOcorrenciaPorId(id);
+
+        if (!atual) {
+            return res.status(404).json({ erro: "Ocorrência não encontrada." });
+        }
+
+        const atualizada = await atualizarOcorrencia(id, {
+            titulo: corpo.titulo?.trim(),
+            descricao: corpo.descricao,
+            prioridade: corpo.prioridade,
+            status: corpo.status,
+            responsavel: corpo.responsavel,
+            prazo: corpo.prazo,
+            orcamento_estimado: corpo.orcamento_estimado,
+            orcamento_aprovado: corpo.orcamento_aprovado,
+            orcamento_gasto: corpo.orcamento_gasto,
+            observacao_ia: corpo.observacao_ia
+        });
+
+        // Mudança de status fica registrada no histórico automaticamente
+        if (corpo.status !== undefined && corpo.status !== atual.status) {
+            await criarHistorico({
+                id_ocorrencia: id,
+                id_usuario: req.administrador.id_usuario,
+                status_anterior: atual.status,
+                novo_status: corpo.status,
+                observacao: String(corpo.observacao || "").trim() || null
+            });
+        }
 
         return res.json({
             mensagem: "Ocorrência atualizada.",
-            resultado
+            ocorrencia: atualizada
         });
     } catch (erro) {
         console.error("Erro ao atualizar ocorrência:", erro);
-        return res.status(500).json({
-            erro: "Erro ao atualizar ocorrência."
-        });
+        return res.status(500).json({ erro: "Erro ao atualizar ocorrência." });
     }
 });
 
-app.delete("/ocorrencias/:id", async (req, res) => {
-    try {
-        await excluirOcorrencia(Number(req.params.id));
+app.delete("/ocorrencias/:id", exigirAdministrador, async (req, res) => {
+    const id = Number(req.params.id);
 
-        return res.json({
-            mensagem: "Ocorrência excluída."
-        });
+    if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ erro: "ID de ocorrência inválido." });
+    }
+
+    try {
+        const removidas = await excluirOcorrencia(id);
+
+        if (!removidas) {
+            return res.status(404).json({ erro: "Ocorrência não encontrada." });
+        }
+
+        return res.json({ mensagem: "Ocorrência excluída." });
     } catch (erro) {
         console.error("Erro ao excluir ocorrência:", erro);
-        return res.status(500).json({
-            erro: "Erro ao excluir ocorrência."
+        return res.status(500).json({ erro: "Erro ao excluir ocorrência." });
+    }
+});
+
+app.get("/ocorrencias/:id/historico", exigirAdministrador, async (req, res) => {
+    try {
+        return res.json(await listarHistorico(Number(req.params.id)));
+    } catch (erro) {
+        console.error("Erro ao buscar histórico:", erro);
+        return res.status(500).json({ erro: "Erro ao buscar histórico." });
+    }
+});
+
+app.get("/ocorrencias/:id/atendimentos", exigirAdministrador, async (req, res) => {
+    try {
+        return res.json(await listarAtendimentos(Number(req.params.id)));
+    } catch (erro) {
+        console.error("Erro ao buscar atendimentos:", erro);
+        return res.status(500).json({ erro: "Erro ao buscar atendimentos." });
+    }
+});
+
+app.get("/ocorrencias/:id/anexos", exigirAdministrador, async (req, res) => {
+    try {
+        return res.json(await listarAnexos(Number(req.params.id)));
+    } catch (erro) {
+        console.error("Erro ao buscar anexos:", erro);
+        return res.status(500).json({ erro: "Erro ao buscar anexos." });
+    }
+});
+
+app.get("/ocorrencias/:id/observacoes", exigirAdministrador, async (req, res) => {
+    try {
+        return res.json(await listarObservacoes(Number(req.params.id)));
+    } catch (erro) {
+        console.error("Erro ao buscar observações:", erro);
+        return res.status(500).json({ erro: "Erro ao buscar observações." });
+    }
+});
+
+app.post("/ocorrencias/:id/observacoes", exigirAdministrador, async (req, res) => {
+    const id = Number(req.params.id);
+    const texto = String(req.body?.texto || "").trim();
+
+    if (!Number.isInteger(id) || id <= 0 || !texto || texto.length > 2000) {
+        return res.status(400).json({ erro: "Informe um texto de até 2000 caracteres." });
+    }
+
+    try {
+        if (!(await buscarOcorrenciaPorId(id))) {
+            return res.status(404).json({ erro: "Ocorrência não encontrada." });
+        }
+
+        const { id_observacao } = await criarObservacao({
+            id_ocorrencia: id,
+            id_usuario: req.administrador.id_usuario,
+            texto
         });
+
+        const observacoes = await listarObservacoes(id);
+        return res.status(201).json({
+            mensagem: "Observação registrada.",
+            observacao: observacoes.find((o) => o.id_observacao === id_observacao) || { id_observacao, texto }
+        });
+    } catch (erro) {
+        console.error("Erro ao criar observação:", erro);
+        return res.status(500).json({ erro: "Erro ao registrar observação." });
+    }
+});
+
+app.get("/ocorrencias/:id/tarefas", exigirAdministrador, async (req, res) => {
+    try {
+        return res.json(await listarTarefas(Number(req.params.id)));
+    } catch (erro) {
+        console.error("Erro ao buscar tarefas:", erro);
+        return res.status(500).json({ erro: "Erro ao buscar tarefas." });
+    }
+});
+
+app.post("/ocorrencias/:id/tarefas", exigirAdministrador, async (req, res) => {
+    const id = Number(req.params.id);
+    const titulo = String(req.body?.titulo || "").trim();
+
+    if (!Number.isInteger(id) || id <= 0 || !titulo || titulo.length > 150) {
+        return res.status(400).json({ erro: "Informe um título de até 150 caracteres." });
+    }
+
+    try {
+        const { id_tarefa } = await criarTarefa({ id_ocorrencia: id, titulo });
+        return res.status(201).json({
+            mensagem: "Tarefa criada.",
+            tarefa: { id_tarefa, id_ocorrencia: id, titulo, concluida: false }
+        });
+    } catch (erro) {
+        console.error("Erro ao criar tarefa:", erro);
+        return res.status(500).json({ erro: "Erro ao criar tarefa." });
+    }
+});
+
+app.put("/tarefas/:id", exigirAdministrador, async (req, res) => {
+    const id = Number(req.params.id);
+    const { titulo, concluida } = req.body || {};
+
+    if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ erro: "ID de tarefa inválido." });
+    }
+
+    if (titulo !== undefined && (typeof titulo !== "string" || !titulo.trim())) {
+        return res.status(400).json({ erro: "Título inválido." });
+    }
+
+    try {
+        const alteradas = await atualizarTarefa(id, {
+            titulo: titulo?.trim(),
+            concluida
+        });
+
+        if (!alteradas) {
+            return res.status(404).json({ erro: "Tarefa não encontrada." });
+        }
+
+        return res.json({ mensagem: "Tarefa atualizada." });
+    } catch (erro) {
+        console.error("Erro ao atualizar tarefa:", erro);
+        return res.status(500).json({ erro: "Erro ao atualizar tarefa." });
+    }
+});
+
+app.delete("/tarefas/:id", exigirAdministrador, async (req, res) => {
+    try {
+        const removidas = await excluirTarefa(Number(req.params.id));
+
+        if (!removidas) {
+            return res.status(404).json({ erro: "Tarefa não encontrada." });
+        }
+
+        return res.json({ mensagem: "Tarefa excluída." });
+    } catch (erro) {
+        console.error("Erro ao excluir tarefa:", erro);
+        return res.status(500).json({ erro: "Erro ao excluir tarefa." });
+    }
+});
+
+// ======================================================
+// ESTATÍSTICAS DO PAINEL
+// ======================================================
+
+app.get("/estatisticas", exigirAdministrador, async (req, res) => {
+    try {
+        return res.json(await obterEstatisticas());
+    } catch (erro) {
+        console.error("Erro ao calcular estatísticas:", erro);
+        return res.status(500).json({ erro: "Erro ao calcular estatísticas." });
     }
 });
 
@@ -881,14 +1303,12 @@ app.delete("/ocorrencias/:id", async (req, res) => {
 // EQUIPES
 // ======================================================
 
-app.get("/equipes", async (req, res) => {
+app.get("/equipes", exigirAdministrador, async (req, res) => {
     try {
         return res.json(await listarEquipes());
     } catch (erro) {
         console.error("Erro ao buscar equipes:", erro);
-        return res.status(500).json({
-            erro: "Erro ao buscar equipes."
-        });
+        return res.status(500).json({ erro: "Erro ao buscar equipes." });
     }
 });
 
@@ -896,91 +1316,69 @@ app.get("/equipes", async (req, res) => {
 // NOTAS
 // ======================================================
 
-app.get("/usuarios/:id/notas", async (req, res) => {
+app.get("/usuarios/:id/notas", exigirUsuarioAtivo, async (req, res) => {
+    const id = Number(req.params.id);
+
+    if (!podeAcessarUsuario(req, id)) {
+        return res.status(403).json({ erro: "Acesso negado." });
+    }
+
     try {
-        return res.json(
-            await listarNotasDoUsuario(Number(req.params.id))
-        );
+        return res.json(await listarNotasDoUsuario(id));
     } catch (erro) {
         console.error("Erro ao buscar notas:", erro);
-        return res.status(500).json({
-            erro: "Erro ao buscar notas."
-        });
+        return res.status(500).json({ erro: "Erro ao buscar notas." });
     }
 });
 
-app.post("/notas", async (req, res) => {
+app.post("/notas", exigirUsuarioAtivo, async (req, res) => {
+    const { titulo, conteudo, tipo } = req.body || {};
+    const idUsuario = req.usuarioAtual.id_usuario;
+
+    if (!titulo?.trim?.() || !conteudo?.trim?.()) {
+        return res.status(400).json({ erro: "Informe título e conteúdo." });
+    }
+
     try {
-        const {
-            id_usuario,
-            titulo,
-            conteudo,
-            tipo
-        } = req.body || {};
-
-        if (
-            !id_usuario ||
-            !titulo?.trim?.() ||
-            !conteudo?.trim?.()
-        ) {
-            return res.status(400).json({
-                erro: "Informe usuário, título e conteúdo."
-            });
-        }
-
         const resultado = await criarNotaBD({
-            id_usuario,
+            id_usuario: idUsuario,
             titulo: titulo.trim(),
             conteudo: conteudo.trim(),
             tipo
         });
 
-        return res.status(201).json({
-            mensagem: "Nota criada.",
-            ...resultado
-        });
+        return res.status(201).json({ mensagem: "Nota criada.", ...resultado });
     } catch (erro) {
         console.error("Erro ao criar nota:", erro);
-        return res.status(500).json({
-            erro: "Erro ao criar nota."
-        });
+        return res.status(500).json({ erro: "Erro ao criar nota." });
     }
 });
 
-app.delete("/notas/:id", async (req, res) => {
+app.delete("/notas/:id", exigirUsuarioAtivo, async (req, res) => {
     try {
+        // Só remove notas do próprio usuário autenticado
         const removidas = await excluirNotaBD(
             Number(req.params.id),
-            req.query.id_usuario
+            req.usuarioAtual.id_usuario
         );
 
         if (!removidas) {
-            return res.status(404).json({
-                erro: "Nota não encontrada."
-            });
+            return res.status(404).json({ erro: "Nota não encontrada." });
         }
 
-        return res.json({
-            mensagem: "Nota excluída."
-        });
+        return res.json({ mensagem: "Nota excluída." });
     } catch (erro) {
         console.error("Erro ao excluir nota:", erro);
-        return res.status(500).json({
-            erro: "Erro ao excluir nota."
-        });
+        return res.status(500).json({ erro: "Erro ao excluir nota." });
     }
 });
 
-app.post("/notas/ia", async (req, res) => {
+app.post("/notas/ia", exigirUsuarioAtivo, async (req, res) => {
     try {
-        const notas = Array.isArray(req.body?.notas)
-            ? req.body.notas
-            : [];
+        const notas = Array.isArray(req.body?.notas) ? req.body.notas : [];
 
         if (!notas.length) {
-            return res.status(400).json({
-                mensagem: "Não há notas para analisar."
-            });
+            return res.status(400).json({ mensagem: "Não há notas para analisar." });
         }
 
         const texto = notas
@@ -990,7 +1388,7 @@ app.post("/notas/ia", async (req, res) => {
             .join("\n\n");
 
         const resposta = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
+            model: MODELO_IA,
             contents:
                 "Resuma as notas abaixo para um administrador da prefeitura, destacando temas recorrentes, pontos de atenção e próximos passos. Responda em português, em até 8 linhas.\n\n" +
                 texto
@@ -1001,9 +1399,51 @@ app.post("/notas/ia", async (req, res) => {
         });
     } catch (erro) {
         console.error("Erro na análise das notas:", erro);
-        return res.status(500).json({
-            mensagem: "Não foi possível gerar a análise."
+        return res.status(500).json({ mensagem: "Não foi possível gerar a análise." });
+    }
+});
+
+// Transcreve o texto de uma foto de caderno/anotação usando o Gemini
+app.post("/notas/transcrever", exigirUsuarioAtivo, async (req, res) => {
+    const { imagem, mimeType } = req.body || {};
+
+    if (typeof imagem !== "string" || !imagem) {
+        return res.status(400).json({ erro: "Envie a imagem." });
+    }
+
+    if (!["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"].includes(mimeType)) {
+        return res.status(400).json({ erro: "Formato de imagem não suportado." });
+    }
+
+    // Aceita tanto base64 puro quanto data URL
+    const base64 = imagem.includes(",") ? imagem.split(",")[1] : imagem;
+
+    try {
+        const resposta = await ai.models.generateContent({
+            model: MODELO_IA,
+            contents: [
+                {
+                    role: "user",
+                    parts: [
+                        { inlineData: { mimeType, data: base64 } },
+                        {
+                            text: "Transcreva fielmente o texto manuscrito ou impresso nesta imagem. Responda somente com o texto transcrito, sem comentários nem formatação extra."
+                        }
+                    ]
+                }
+            ]
         });
+
+        const texto = (resposta.text || "").trim();
+
+        if (!texto) {
+            return res.status(422).json({ erro: "Não foi possível identificar texto nesta imagem." });
+        }
+
+        return res.json({ texto });
+    } catch (erro) {
+        console.error("Erro na transcrição:", erro);
+        return res.status(500).json({ erro: "Não foi possível transcrever a imagem agora." });
     }
 });
 
@@ -1011,84 +1451,54 @@ app.post("/notas/ia", async (req, res) => {
 // LOCALIZAÇÕES
 // ======================================================
 
-app.get("/localizacoes", async (req, res) => {
+app.get("/localizacoes", exigirAdministrador, async (req, res) => {
     try {
         return res.json(await listarLocalizacoes());
     } catch (erro) {
         console.error("Erro ao buscar localizações:", erro);
-        return res.status(500).json({
-            erro: "Erro ao buscar localizações."
-        });
+        return res.status(500).json({ erro: "Erro ao buscar localizações." });
     }
 });
 
-app.get("/localizacoes/:idOcorrencia", async (req, res) => {
+app.get("/localizacoes/:idOcorrencia", exigirAdministrador, async (req, res) => {
     try {
-        const localizacao = await buscarLocalizacao(
-            Number(req.params.idOcorrencia)
-        );
+        const localizacao = await buscarLocalizacao(Number(req.params.idOcorrencia));
 
         if (!localizacao) {
-            return res.status(404).json({
-                erro: "Localização não encontrada."
-            });
+            return res.status(404).json({ erro: "Localização não encontrada." });
         }
 
         return res.json(localizacao);
     } catch (erro) {
         console.error("Erro ao buscar localização:", erro);
-        return res.status(500).json({
-            erro: "Erro ao buscar localização."
-        });
-    }
-});
-
-app.post("/localizacoes", async (req, res) => {
-    try {
-        const resultado = await criarLocalizacao(req.body);
-
-        return res.status(201).json({
-            mensagem: "Localização cadastrada.",
-            ...resultado
-        });
-    } catch (erro) {
-        console.error("Erro ao cadastrar localização:", erro);
-        return res.status(500).json({
-            erro: "Erro ao cadastrar localização."
-        });
+        return res.status(500).json({ erro: "Erro ao buscar localização." });
     }
 });
 
 // ======================================================
-// HISTÓRICO DAS OCORRÊNCIAS
+// HISTÓRICO
 // ======================================================
 
-app.get("/ocorrencias/:id/historico", async (req, res) => {
-    try {
-        return res.json(
-            await listarHistorico(Number(req.params.id))
-        );
-    } catch (erro) {
-        console.error("Erro ao buscar histórico:", erro);
-        return res.status(500).json({
-            erro: "Erro ao buscar histórico."
-        });
+app.post("/historico", exigirAdministrador, async (req, res) => {
+    const { id_ocorrencia, novo_status } = req.body || {};
+
+    if (!Number.isInteger(Number(id_ocorrencia)) || !STATUS_OCORRENCIA.includes(novo_status)) {
+        return res.status(400).json({ erro: "Informe a ocorrência e um status válido." });
     }
-});
 
-app.post("/historico", async (req, res) => {
     try {
-        const resultado = await criarHistorico(req.body);
-
-        return res.status(201).json({
-            mensagem: "Histórico registrado.",
-            ...resultado
+        const resultado = await criarHistorico({
+            id_ocorrencia: Number(id_ocorrencia),
+            id_usuario: req.administrador.id_usuario,
+            status_anterior: req.body.status_anterior || null,
+            novo_status,
+            observacao: String(req.body.observacao || "").trim() || null
         });
+
+        return res.status(201).json({ mensagem: "Histórico registrado.", ...resultado });
     } catch (erro) {
         console.error("Erro ao registrar histórico:", erro);
-        return res.status(500).json({
-            erro: "Erro ao registrar histórico."
-        });
+        return res.status(500).json({ erro: "Erro ao registrar histórico." });
     }
 });
 
@@ -1096,32 +1506,28 @@ app.post("/historico", async (req, res) => {
 // ATENDIMENTOS
 // ======================================================
 
-app.get("/ocorrencias/:id/atendimentos", async (req, res) => {
-    try {
-        return res.json(
-            await listarAtendimentos(Number(req.params.id))
-        );
-    } catch (erro) {
-        console.error("Erro ao buscar atendimentos:", erro);
-        return res.status(500).json({
-            erro: "Erro ao buscar atendimentos."
-        });
+app.post("/atendimentos", exigirAdministrador, async (req, res) => {
+    const { id_ocorrencia, id_equipe, observacao } = req.body || {};
+
+    if (!Number.isInteger(Number(id_ocorrencia)) || !Number.isInteger(Number(id_equipe))) {
+        return res.status(400).json({ erro: "Informe a ocorrência e a equipe." });
     }
-});
 
-app.post("/atendimentos", async (req, res) => {
     try {
-        const resultado = await criarAtendimento(req.body);
+        const resultado = await criarAtendimento({
+            id_ocorrencia: Number(id_ocorrencia),
+            id_equipe: Number(id_equipe),
+            observacao
+        });
 
-        return res.status(201).json({
-            mensagem: "Atendimento criado.",
-            ...resultado
-        });
+        return res.status(201).json({ mensagem: "Atendimento criado.", ...resultado });
     } catch (erro) {
+        if (erro.message === "EQUIPE_INEXISTENTE") {
+            return res.status(400).json({ erro: "A equipe informada não existe." });
+        }
+
         console.error("Erro ao criar atendimento:", erro);
-        return res.status(500).json({
-            erro: "Erro ao criar atendimento."
-        });
+        return res.status(500).json({ erro: "Erro ao criar atendimento." });
     }
 });
 
@@ -1129,47 +1535,44 @@ app.post("/atendimentos", async (req, res) => {
 // NOTIFICAÇÕES
 // ======================================================
 
-app.get("/usuarios/:id/notificacoes", async (req, res) => {
+app.get("/usuarios/:id/notificacoes", exigirUsuarioAtivo, async (req, res) => {
+    const id = Number(req.params.id);
+
+    if (!podeAcessarUsuario(req, id)) {
+        return res.status(403).json({ erro: "Acesso negado." });
+    }
+
     try {
-        return res.json(
-            await listarNotificacoes(Number(req.params.id))
-        );
+        return res.json(await listarNotificacoes(id));
     } catch (erro) {
         console.error("Erro ao buscar notificações:", erro);
-        return res.status(500).json({
-            erro: "Erro ao buscar notificações."
-        });
+        return res.status(500).json({ erro: "Erro ao buscar notificações." });
     }
 });
 
-app.post("/notificacoes", async (req, res) => {
+app.put("/usuarios/:id/notificacoes/lidas", exigirUsuarioAtivo, async (req, res) => {
+    const id = Number(req.params.id);
+
+    if (!podeAcessarUsuario(req, id)) {
+        return res.status(403).json({ erro: "Acesso negado." });
+    }
+
     try {
-        const resultado = await criarNotificacao(req.body);
-
-        return res.status(201).json({
-            mensagem: "Notificação criada.",
-            ...resultado
-        });
+        await marcarTodasComoLidas(id);
+        return res.json({ mensagem: "Notificações marcadas como lidas." });
     } catch (erro) {
-        console.error("Erro ao criar notificação:", erro);
-        return res.status(500).json({
-            erro: "Erro ao criar notificação."
-        });
+        console.error("Erro ao atualizar notificações:", erro);
+        return res.status(500).json({ erro: "Erro ao atualizar notificações." });
     }
 });
 
-app.put("/notificacoes/:id/lida", async (req, res) => {
+app.put("/notificacoes/:id/lida", exigirUsuarioAtivo, async (req, res) => {
     try {
         await marcarComoLida(Number(req.params.id));
-
-        return res.json({
-            mensagem: "Notificação marcada como lida."
-        });
+        return res.json({ mensagem: "Notificação marcada como lida." });
     } catch (erro) {
         console.error("Erro ao atualizar notificação:", erro);
-        return res.status(500).json({
-            erro: "Erro ao atualizar notificação."
-        });
+        return res.status(500).json({ erro: "Erro ao atualizar notificação." });
     }
 });
 
@@ -1177,96 +1580,56 @@ app.put("/notificacoes/:id/lida", async (req, res) => {
 // ANEXOS
 // ======================================================
 
-app.get("/ocorrencias/:id/anexos", async (req, res) => {
-    try {
-        return res.json(
-            await listarAnexos(Number(req.params.id))
-        );
-    } catch (erro) {
-        console.error("Erro ao buscar anexos:", erro);
-        return res.status(500).json({
-            erro: "Erro ao buscar anexos."
-        });
-    }
-});
-
-app.post("/anexos", async (req, res) => {
+app.post("/anexos", exigirAdministrador, async (req, res) => {
     try {
         const resultado = await criarAnexo(req.body);
-
-        return res.status(201).json({
-            mensagem: "Anexo registrado.",
-            ...resultado
-        });
+        return res.status(201).json({ mensagem: "Anexo registrado.", ...resultado });
     } catch (erro) {
         console.error("Erro ao registrar anexo:", erro);
-        return res.status(500).json({
-            erro: "Erro ao registrar anexo."
-        });
+        return res.status(500).json({ erro: "Erro ao registrar anexo." });
     }
 });
 
 // ======================================================
-// DENÚNCIAS
-// Aceita o formulário antigo e o formulário público.
+// DENÚNCIAS (formulário público e área logada)
 // ======================================================
 
 app.post("/denuncia", async (req, res) => {
     const body = req.body || {};
 
     const usuarioRaw = body.id_usuario ?? body.id ?? null;
-
     const usuarioId =
         usuarioRaw === null || usuarioRaw === ""
             ? null
             : Number(usuarioRaw);
 
-    const categoriaNome = String(
-        body.categoria || ""
-    ).trim();
-
     const categoriaRaw = body.id_categoria ?? null;
-
-    const descricao = String(
-        body.descricao || ""
-    ).trim();
-
-    const cidade = String(
-        body.cidade || ""
-    ).trim();
-
-    const bairro = String(
-        body.bairro || ""
-    ).trim();
-
-    const rua = String(
-        body.rua || body.endereco || "Não informado"
-    ).trim() || "Não informado";
+    const categoriaNome = String(body.categoria || "").trim();
+    const descricao = String(body.descricao || "").trim();
+    const cidade = String(body.cidade || "").trim();
+    const bairro = String(body.bairro || "").trim();
+    const rua = String(body.rua || body.endereco || "").trim() || "Não informado";
 
     const titulo = String(
         body.titulo ||
         `${categoriaNome || "Relato cidadão"}: ${descricao.slice(0, 90)}`
-    ).trim();
+    ).trim().slice(0, 100);
 
-    const gravidadeBruta = String(
-        body.gravidade || body.prioridade || "media"
-    ).trim().toLowerCase();
+    const gravidadeBruta = String(body.gravidade || body.prioridade || "media")
+        .trim()
+        .toLowerCase();
 
     const prioridades = {
         baixa: "Baixa",
         media: "Média",
-        média: "Média",
+        "média": "Média",
         alta: "Alta"
     };
 
-    const prioridade =
-        prioridades[gravidadeBruta] || "Média";
+    const prioridade = prioridades[gravidadeBruta] || "Média";
 
     if (
-        (
-            usuarioId !== null &&
-            (!Number.isInteger(usuarioId) || usuarioId <= 0)
-        ) ||
+        (usuarioId !== null && (!Number.isInteger(usuarioId) || usuarioId <= 0)) ||
         !titulo ||
         descricao.length < 10 ||
         !cidade ||
@@ -1281,74 +1644,34 @@ app.post("/denuncia", async (req, res) => {
     try {
         if (usuarioId !== null) {
             const [usuarios] = await db.execute(
-                `SELECT id_usuario
-                 FROM usuarios
-                 WHERE id_usuario = ?
-                   AND status = 'Ativo'
-                 LIMIT 1`,
+                `SELECT id_usuario FROM usuarios WHERE id_usuario = ? AND status = 'Ativo' LIMIT 1`,
                 [usuarioId]
             );
 
             if (!usuarios.length) {
-                return res.status(400).json({
-                    erro: "Usuário inexistente ou inativo."
-                });
+                return res.status(400).json({ erro: "Usuário inexistente ou inativo." });
             }
         }
 
-        let categoriaId = Number(categoriaRaw);
+        // A categoria precisa existir e estar ativa; o formulário público não cria categorias
+        const categoria = categoriaRaw !== null && Number.isInteger(Number(categoriaRaw))
+            ? await buscarCategoriaPorId(Number(categoriaRaw))
+            : await buscarCategoriaPorNome(categoriaNome);
 
-        if (!Number.isInteger(categoriaId) || categoriaId <= 0) {
-            const [encontradas] = await db.execute(
-                `SELECT id_categoria
-                 FROM categorias
-                 WHERE nome = ?
-                 LIMIT 1`,
-                [categoriaNome]
-            );
-
-            if (encontradas.length) {
-                categoriaId = encontradas[0].id_categoria;
-            } else {
-                const [nova] = await db.execute(
-                    `INSERT INTO categorias (nome, descricao)
-                     VALUES (?, ?)`,
-                    [
-                        categoriaNome,
-                        "Categoria criada pelo formulário público de denúncias"
-                    ]
-                );
-
-                categoriaId = nova.insertId;
-            }
-        } else {
-            const categoria = await buscarCategoriaPorId(categoriaId);
-
-            if (!categoria) {
-                return res.status(400).json({
-                    erro: "A categoria informada não existe."
-                });
-            }
+        if (!categoria || categoria.status !== "Ativa") {
+            return res.status(400).json({ erro: "A categoria informada não está disponível." });
         }
 
-        const resultado = await criarOcorrencia({
+        const { id_ocorrencia } = await criarOcorrencia({
             id_usuario: usuarioId,
-            id_categoria: categoriaId,
+            id_categoria: categoria.id_categoria,
             titulo,
             descricao,
             prioridade
         });
 
-        const idOcorrencia = resultado.id_ocorrencia;
-
-        if (!idOcorrencia) {
-            throw new Error(
-                "A criação da ocorrência não retornou id_ocorrencia."
-            );
-        }
-
         await criarLocalizacao({
-            id_ocorrencia: idOcorrencia,
+            id_ocorrencia,
             endereco: rua,
             bairro,
             cidade,
@@ -1356,136 +1679,54 @@ app.post("/denuncia", async (req, res) => {
             longitude: body.longitude ?? null
         });
 
+        await criarHistorico({
+            id_ocorrencia,
+            id_usuario: usuarioId,
+            status_anterior: null,
+            novo_status: "Aberta",
+            observacao: "Denúncia registrada pelo formulário."
+        });
+
+        // Avisa os administradores que têm notificações ativadas
+        const [admins] = await db.execute(
+            `SELECT u.id_usuario
+             FROM usuarios u
+             LEFT JOIN preferencias_usuarios p ON p.id_usuario = u.id_usuario
+             WHERE (u.perfil = 'Administrador' OR u.cargo = 'Administrador')
+               AND u.status = 'Ativo'
+               AND COALESCE(p.notificacoes, 1) = 1`
+        );
+
+        const mensagem = prioridade === "Alta"
+            ? `Nova denúncia de alta prioridade: ${titulo}`
+            : `Nova denúncia registrada: ${titulo}`;
+
+        for (const admin of admins) {
+            await criarNotificacao({
+                id_usuario: admin.id_usuario,
+                id_ocorrencia,
+                mensagem
+            });
+        }
+
+        // Análise pela IA em segundo plano: a denúncia já está salva mesmo se a IA falhar
+        analisarOcorrenciaIA(id_ocorrencia).catch((erro) =>
+            console.error("Falha na análise automática da IA:", erro)
+        );
+
         return res.status(201).json({
             mensagem: "Denúncia registrada com sucesso.",
-            id_ocorrencia: idOcorrencia,
-            protocolo: `NX-${String(idOcorrencia).padStart(6, "0")}`
+            id_ocorrencia,
+            protocolo: `NX-${String(id_ocorrencia).padStart(6, "0")}`
         });
     } catch (erro) {
         console.error("Erro ao registrar denúncia:", erro);
 
         return res.status(500).json({
-            erro: "Não foi possível registrar a denúncia. Confira o banco de dados e os módulos de ocorrências e localizações."
+            erro: "Não foi possível registrar a denúncia. Tente novamente em instantes."
         });
     }
 });
-
-// ======================================================
-// PREFERÊNCIAS DOS USUÁRIOS
-// ======================================================
-
-app.get(
-    "/usuarios/:id/preferencias",
-    async (req, res) => {
-        const id = Number(req.params.id);
-
-        if (!Number.isInteger(id) || id <= 0) {
-            return res.status(400).json({
-                erro: "ID inválido."
-            });
-        }
-
-        try {
-            const [usuarios] = await db.execute(
-                `SELECT id_usuario
-                 FROM usuarios
-                 WHERE id_usuario = ?
-                 LIMIT 1`,
-                [id]
-            );
-
-            if (!usuarios.length) {
-                return res.status(404).json({
-                    erro: "Usuário não encontrado."
-                });
-            }
-
-            const [linhas] = await db.execute(
-                `SELECT notificacoes, alertas_urgentes
-                 FROM preferencias_usuarios
-                 WHERE id_usuario = ?
-                 LIMIT 1`,
-                [id]
-            );
-
-            if (!linhas.length) {
-                await db.execute(
-                    `INSERT INTO preferencias_usuarios
-                        (id_usuario, notificacoes, alertas_urgentes)
-                     VALUES (?, 1, 1)`,
-                    [id]
-                );
-
-                return res.json({
-                    notificacoes: true,
-                    alertasUrgentes: true
-                });
-            }
-
-            return res.json({
-                notificacoes: Boolean(linhas[0].notificacoes),
-                alertasUrgentes: Boolean(
-                    linhas[0].alertas_urgentes
-                )
-            });
-        } catch (erro) {
-            console.error("Erro ao buscar preferências:", erro);
-
-            return res.status(500).json({
-                erro: "Erro ao buscar preferências."
-            });
-        }
-    }
-);
-
-app.put(
-    "/usuarios/:id/preferencias",
-    async (req, res) => {
-        const id = Number(req.params.id);
-
-        const {
-            notificacoes,
-            alertasUrgentes
-        } = req.body || {};
-
-        if (
-            !Number.isInteger(id) ||
-            id <= 0 ||
-            typeof notificacoes !== "boolean" ||
-            typeof alertasUrgentes !== "boolean"
-        ) {
-            return res.status(400).json({
-                erro: "Dados inválidos."
-            });
-        }
-
-        try {
-            await db.execute(
-                `INSERT INTO preferencias_usuarios
-                    (id_usuario, notificacoes, alertas_urgentes)
-                 VALUES (?, ?, ?)
-                 ON DUPLICATE KEY UPDATE
-                    notificacoes = VALUES(notificacoes),
-                    alertas_urgentes = VALUES(alertas_urgentes)`,
-                [
-                    id,
-                    Number(notificacoes),
-                    Number(alertasUrgentes)
-                ]
-            );
-
-            return res.json({
-                mensagem: "Preferências salvas com sucesso."
-            });
-        } catch (erro) {
-            console.error("Erro ao salvar preferências:", erro);
-
-            return res.status(500).json({
-                erro: "Erro ao salvar preferências."
-            });
-        }
-    }
-);
 
 // ======================================================
 // INICIALIZAÇÃO
@@ -1496,20 +1737,11 @@ const PORT = Number(process.env.PORT) || 3000;
 prepararTabelaChat()
     .then(() => {
         servidorHttp.listen(PORT, () => {
-            console.log(
-                `Servidor rodando em http://localhost:${PORT}`
-            );
-
-            console.log(
-                "Chat em tempo real preparado; tabela mensagens_chat verificada."
-            );
+            console.log(`Servidor rodando em http://localhost:${PORT}`);
+            console.log("Chat em tempo real preparado; tabela mensagens_chat verificada.");
         });
     })
     .catch((erro) => {
-        console.error(
-            "Não foi possível preparar a tabela do chat. Confira o MySQL:",
-            erro
-        );
-
+        console.error("Não foi possível preparar a tabela do chat. Confira o MySQL:", erro);
         process.exit(1);
     });

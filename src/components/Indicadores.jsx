@@ -1,5 +1,6 @@
 
 import { useEffect, useState } from "react";
+import { buscarEstatisticas } from "../dados";
 
 import {
   FaFileAlt,
@@ -47,19 +48,43 @@ function NumeroAnimado({ valor, duracao = 1000 }) {
   return <>{numero}</>;
 }
 
+// Compara os últimos 7 dias com os 7 anteriores
+function calcularCrescimento(porDia = []) {
+  const ultimos = porDia.slice(-7).reduce((t, d) => t + d.quantidade, 0);
+  const anteriores = porDia.slice(-14, -7).reduce((t, d) => t + d.quantidade, 0);
+
+  if (!anteriores) return "";
+
+  const variacao = Math.round(((ultimos - anteriores) / anteriores) * 100);
+  if (variacao === 0) return "";
+
+  return `${variacao > 0 ? "↑" : "↓"} ${Math.abs(variacao)}%`;
+}
+
 function Indicadores() {
+  const [estatisticas, setEstatisticas] = useState(null);
+
+  useEffect(() => {
+    buscarEstatisticas()
+      .then(setEstatisticas)
+      .catch(() => setEstatisticas(null));
+  }, []);
+
+  const totais = estatisticas?.totais;
+  const crescimento = calcularCrescimento(estatisticas?.porDia);
+
   const indicadores = [
     {
       titulo: "Total de denúncias",
-      valor: 124,
-      descricao: "em relação à semana passada",
-      crescimento: "↑ 12%",
+      valor: totais?.total ?? 0,
+      descricao: crescimento ? "em relação à semana passada" : "registradas no total",
+      crescimento,
       classe: "roxo",
       icone: <FaFileAlt />
     },
     {
       titulo: "Em análise",
-      valor: 32,
+      valor: totais?.emAnalise ?? 0,
       descricao: "Aguardando revisão",
       crescimento: "",
       classe: "azul",
@@ -67,7 +92,7 @@ function Indicadores() {
     },
     {
       titulo: "Alta gravidade",
-      valor: 8,
+      valor: totais?.altaGravidade ?? 0,
       descricao: "Requer atenção urgente",
       crescimento: "",
       classe: "vermelho",
@@ -75,7 +100,7 @@ function Indicadores() {
     },
     {
       titulo: "Resolvidas",
-      valor: 84,
+      valor: totais?.resolvidas ?? 0,
       descricao: "Problemas solucionados",
       crescimento: "",
       classe: "verde",
